@@ -30,6 +30,10 @@ A self-hosted web UI for running commands on remote servers over SSH (Linux) and
       - ./config/rcommander:/data
 ```
 
+```bash
+docker compose up -d
+```
+
 Open **http://your-host:8090**
 
 ## WinRM Setup (Windows)
