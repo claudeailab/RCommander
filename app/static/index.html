@@ -295,6 +295,21 @@
     margin-top: 2px;
   }
 
+  /* ── Import preview ── */
+  .preview-wrap {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: auto;
+    max-height: 220px;
+  }
+  .preview-wrap table { font-size: 12px; }
+  .preview-wrap th { font-size: 10px; padding: 6px 10px; }
+  .preview-wrap td { padding: 6px 10px; }
+  .row-ok   td:first-child { border-left: 3px solid var(--accent-h); }
+  .row-warn td:first-child { border-left: 3px solid var(--warn); }
+  .import-hint { font-size: 11px; color: var(--muted); line-height: 1.6; }
+  .import-hint code { color: var(--warn); background: #1a1a1a; padding: 1px 4px; border-radius: 3px; }
+
   /* ── Notifications ── */
   .toast-container {
     position: fixed;
@@ -421,10 +436,16 @@
   <div id="tab-servers">
     <div class="topbar">
       <span class="page-title">Servers</span>
-      <button class="btn btn-primary" onclick="openModal('server')">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Add Server
-      </button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" onclick="openImportModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Import CSV
+        </button>
+        <button class="btn btn-primary" onclick="openModal('server')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add Server
+        </button>
+      </div>
     </div>
     <div class="content">
       <div class="card">
@@ -983,6 +1004,145 @@ function toast(msg, type = 'ok') {
   el.innerHTML = `${type === 'ok' ? '✓' : '✗'} ${msg}`;
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// ── CSV Import ────────────────────────────────────────────────────────────────
+
+let _importRows = [];
+
+function openImportModal() {
+  _importRows = [];
+  const overlay = document.getElementById('overlay');
+  const box     = document.getElementById('modal-box');
+  box.innerHTML = `
+    <div class="modal-header">
+      <span class="modal-title">Import Servers from CSV</span>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="import-hint">
+      Columns: <code>name</code>, <code>host</code>, <code>port</code>, <code>type</code>, <code>credential</code>, <code>description</code><br>
+      Only <code>name</code> and <code>host</code> are required. <code>type</code> defaults to <code>ssh</code>.
+      <code>credential</code> is matched by name.
+    </div>
+    <div class="form-group">
+      <label>Upload file</label>
+      <input type="file" id="f-csv-file" accept=".csv,.txt" onchange="onCsvFile(event)" style="cursor:pointer">
+    </div>
+    <div class="form-group">
+      <label>Or paste CSV</label>
+      <textarea id="f-csv-text" rows="5" placeholder="web-prod,10.0.1.10,22,ssh,prod-key,Production web server
+win-dc01,10.0.1.50,5985,winrm,admin-win,Domain controller" oninput="parseCsvInput()"></textarea>
+    </div>
+    <div id="import-preview"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="import-btn" onclick="runImport()" disabled>Import</button>
+    </div>`;
+  overlay.classList.remove('hidden');
+}
+
+function parseCsv(text) {
+  const rows = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    // Simple CSV split (handles quoted fields)
+    const cols = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+      else cur += ch;
+    }
+    cols.push(cur.trim());
+    const [name='', host='', port='', type='', credential='', description=''] = cols;
+    if (!name || !host) continue;
+    const serverType = (type.toLowerCase() === 'winrm') ? 'winrm' : 'ssh';
+    const defaultPort = serverType === 'winrm' ? 5985 : 22;
+    const cred = credential ? state.credentials.find(c => c.name.toLowerCase() === credential.toLowerCase()) : null;
+    rows.push({
+      name, host,
+      port: parseInt(port) || defaultPort,
+      type: serverType,
+      credential_id: cred ? cred.id : null,
+      credential_name: credential,
+      cred_found: !credential || !!cred,
+      description,
+    });
+  }
+  return rows;
+}
+
+function onCsvFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById('f-csv-text').value = ev.target.result;
+    parseCsvInput();
+  };
+  reader.readAsText(file);
+}
+
+function parseCsvInput() {
+  const text = document.getElementById('f-csv-text').value;
+  _importRows = parseCsv(text);
+  renderImportPreview();
+}
+
+function renderImportPreview() {
+  const el = document.getElementById('import-preview');
+  const btn = document.getElementById('import-btn');
+  if (!_importRows.length) { el.innerHTML = ''; btn.disabled = true; return; }
+
+  btn.disabled = false;
+  el.innerHTML = `
+    <div class="form-group">
+      <label>${_importRows.length} server${_importRows.length !== 1 ? 's' : ''} parsed</label>
+      <div class="preview-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Type</th><th>Credential</th><th>Description</th></tr></thead>
+          <tbody>
+            ${_importRows.map(r => `
+              <tr class="${r.cred_found ? 'row-ok' : 'row-warn'}">
+                <td><strong>${escape(r.name)}</strong></td>
+                <td><code style="color:var(--blue)">${escape(r.host)}</code></td>
+                <td>${r.port}</td>
+                <td><span class="badge badge-${r.type}">${r.type.toUpperCase()}</span></td>
+                <td>${r.credential_name
+                  ? r.cred_found
+                    ? `<span class="badge badge-key">${escape(r.credential_name)}</span>`
+                    : `<span style="color:var(--warn);font-size:11px">⚠ "${escape(r.credential_name)}" not found</span>`
+                  : '<span style="color:var(--muted);font-size:11px">—</span>'}</td>
+                <td style="color:var(--muted);font-size:12px">${escape(r.description)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function runImport() {
+  if (!_importRows.length) return;
+  const btn = document.getElementById('import-btn');
+  btn.disabled = true;
+  btn.textContent = 'Importing…';
+  try {
+    const payload = _importRows.map(({ name, host, port, type, credential_id, description }) =>
+      ({ name, host, port, type, credential_id: credential_id ?? null, description })
+    );
+    const res = await api('POST', '/api/servers/import', payload);
+    closeModal();
+    await loadAll();
+    const msg = `Imported ${res.created} server${res.created !== 1 ? 's' : ''}` +
+      (res.skipped ? `, ${res.skipped} skipped (already exist)` : '');
+    toast(msg);
+  } catch(e) {
+    toast(e.message, 'fail');
+    btn.disabled = false;
+    btn.textContent = 'Import';
+  }
 }
 
 // ── Port helper ───────────────────────────────────────────────────────────────

@@ -109,6 +109,12 @@ class ExecuteRequest(BaseModel):
     command_id: int
 
 
+class ImportResult(BaseModel):
+    created: int
+    skipped: int
+    errors: list[str]
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def row_to_dict(row) -> dict:
@@ -233,6 +239,24 @@ def update_server(server_id: int, data: ServerIn):
         db.commit()
         db.refresh(row)
         return row_to_dict(row)
+
+
+@app.post("/api/servers/import")
+def import_servers(servers: list[ServerIn]) -> ImportResult:
+    created = skipped = 0
+    errors: list[str] = []
+    with Session() as db:
+        for s in servers:
+            try:
+                row = ServerRow(**s.model_dump())
+                db.add(row)
+                db.flush()
+                created += 1
+            except Exception:
+                db.rollback()
+                skipped += 1
+        db.commit()
+    return ImportResult(created=created, skipped=skipped, errors=errors)
 
 
 @app.delete("/api/servers/{server_id}", status_code=204)
