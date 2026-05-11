@@ -47,10 +47,5 @@ Enable-PSRemoting -Force
 Set-Item WSMan:\localhost\Service\Auth\Basic $true
 Set-Item WSMan:\localhost\Service\AllowUnencrypted $true
 Restart-Service WinRM
-```
-
-Then open the firewall port in **CMD as Administrator**:
-
-```cmd
-netsh advfirewall firewall add rule name="WinRM 5985" dir=in action=allow protocol=TCP localport=5985
+New-NetFirewallRule -DisplayName "WinRM 5985" -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow
 ```
