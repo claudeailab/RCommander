@@ -1048,8 +1048,9 @@ async function runCommand() {
           else if (ev.type === 'stderr') appendTerm('stderr', ev.text);
           else if (ev.type === 'error') appendTerm('error', `Error: ${ev.text}`);
           else if (ev.type === 'exit') {
-            appendTerm(ev.code === 0 ? 'success' : 'stderr',
-              `\n[Process exited with code ${ev.code}]`);
+            const ok = ev.code === 0;
+            appendTerm(ok ? 'success' : 'stderr',
+              ok ? '\n✔ Command completed successfully' : `\n✖ Command failed (exit code ${ev.code})`);
           }
         } catch {}
       }
