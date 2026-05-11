@@ -40,10 +40,11 @@ Open **http://your-host:8090**
 
 ## WinRM Setup (Windows)
 
-Enable WinRM on the target Windows host:
+Run the following in **PowerShell as Administrator** on the target Windows host:
 
 ```powershell
-winrm quickconfig
-winrm set winrm/config/service/Auth '@{Basic="true"}'
-winrm set winrm/config/service '@{AllowUnencrypted="true"}'
+Enable-PSRemoting -Force
+Set-Item WSMan:\localhost\Service\Auth\Basic $true
+Set-Item WSMan:\localhost\Service\AllowUnencrypted $true
+Restart-Service WinRM
 ```
