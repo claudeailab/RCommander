@@ -30,7 +30,7 @@ class ServerRow(Base):
     type = Column(String, nullable=False, default="ssh")
     description = Column(Text, default="")
     credential_id = Column(Integer, nullable=True)
-    group = Column(String, default="")
+    server_group = Column(String, default="")
 
 
 class CredentialRow(Base):
@@ -61,7 +61,7 @@ def _migrate():
         ("credentials", "description",   "TEXT NOT NULL DEFAULT ''"),
         ("commands",    "description",   "TEXT NOT NULL DEFAULT ''"),
         ("servers",     "credential_id", "INTEGER"),
-        ("servers",     "group",         "TEXT NOT NULL DEFAULT ''"),
+        ("servers",     "server_group",  "TEXT NOT NULL DEFAULT ''"),
     ]
     with engine.connect() as conn:
         for table, column, col_def in migrations:
@@ -89,7 +89,7 @@ class ServerIn(BaseModel):
     type: str = "ssh"
     description: str = ""
     credential_id: Optional[int] = None
-    group: str = ""
+    server_group: str = ""
 
 
 class CredentialIn(BaseModel):

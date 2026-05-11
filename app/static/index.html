@@ -628,7 +628,7 @@ function renderServers() {
     servers = servers.filter(s =>
       s.name.toLowerCase().includes(q) ||
       s.host.toLowerCase().includes(q) ||
-      (s.group||'').toLowerCase().includes(q)
+      (s.server_group||'').toLowerCase().includes(q)
     );
   }
 
@@ -642,7 +642,7 @@ function renderServers() {
   // Bucket by group (empty group = ungrouped, rendered inline)
   const groups = {};
   for (const s of servers) {
-    const g = s.group || '';
+    const g = s.server_group || '';
     if (!groups[g]) groups[g] = [];
     groups[g].push(s);
   }
@@ -823,9 +823,9 @@ function openModal(type, id = null) {
       </div>
       <div class="form-group">
         <label>Group</label>
-        <input id="f-group" value="${escape(s?.group ?? '')}" placeholder="e.g. Production, Lab, Windows" list="group-suggestions">
+        <input id="f-group" value="${escape(s?.server_group ?? '')}" placeholder="e.g. Production, Lab, Windows" list="group-suggestions">
         <datalist id="group-suggestions">
-          ${[...new Set(state.servers.map(x => x.group).filter(Boolean))].map(g => `<option value="${escape(g)}">`).join('')}
+          ${[...new Set(state.servers.map(x => x.server_group).filter(Boolean))].map(g => `<option value="${escape(g)}">`).join('')}
         </datalist>
       </div>
       <div class="form-group">
@@ -931,7 +931,7 @@ function val(id) { return document.getElementById(id)?.value?.trim() ?? ''; }
 
 async function saveServer() {
   const credVal = document.getElementById('f-credential')?.value;
-  const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22, type: val('f-type'), description: val('f-desc'), group: val('f-group'), credential_id: credVal ? parseInt(credVal) : null };
+  const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22, type: val('f-type'), description: val('f-desc'), server_group: val('f-group'), credential_id: credVal ? parseInt(credVal) : null };
   if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
   try {
     if (_editId) await api('PUT', `/api/servers/${_editId}`, body);
@@ -1190,7 +1190,7 @@ async function runImport() {
   btn.textContent = 'Importing…';
   try {
     const payload = _importRows.map(({ name, host, port, type, credential_id, description, group }) =>
-      ({ name, host, port, type, credential_id: credential_id ?? null, description, group: group ?? '' })
+      ({ name, host, port, type, credential_id: credential_id ?? null, description, server_group: group ?? '' })
     );
     const res = await api('POST', '/api/servers/import', payload);
     closeModal();
