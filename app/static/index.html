@@ -617,7 +617,7 @@ function escape(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-const _collapsedGroups = new Set();
+const _expandedGroups = new Set();
 
 function renderServers() {
   const tbody = document.getElementById('servers-body');
@@ -673,7 +673,7 @@ function renderServers() {
   }
   // Named groups
   for (const [g, members] of Object.entries(groups).filter(([k]) => k)) {
-    const collapsed = _collapsedGroups.has(g);
+    const collapsed = !_expandedGroups.has(g);
     const icon = collapsed ? '▶' : '▼';
     html += `<tr class="group-header" data-group="${escape(g)}" style="cursor:pointer;background:#111820;user-select:none">
       <td colspan="7" style="padding:7px 16px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px">
@@ -705,8 +705,8 @@ function renderServers() {
 }
 
 function toggleGroup(name) {
-  if (_collapsedGroups.has(name)) _collapsedGroups.delete(name);
-  else _collapsedGroups.add(name);
+  if (_expandedGroups.has(name)) _expandedGroups.delete(name);
+  else _expandedGroups.add(name);
   renderServers();
 }
 
