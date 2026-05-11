@@ -640,6 +640,7 @@ function renderServers() {
   }
 
   // Bucket by group (empty group = ungrouped, rendered inline)
+  servers = [...servers].sort((a, b) => a.name.localeCompare(b.name));
   const groups = {};
   for (const s of servers) {
     const g = s.server_group || '';
@@ -671,8 +672,8 @@ function renderServers() {
   if (groups['']) {
     html += groups[''].map(serverRow).join('');
   }
-  // Named groups
-  for (const [g, members] of Object.entries(groups).filter(([k]) => k)) {
+  // Named groups (alphabetical)
+  for (const [g, members] of Object.entries(groups).filter(([k]) => k).sort(([a],[b]) => a.localeCompare(b))) {
     const collapsed = !_expandedGroups.has(g);
     const icon = collapsed ? '▶' : '▼';
     html += `<tr class="group-header" data-group="${escape(g)}" style="cursor:pointer;background:#111820;user-select:none">
