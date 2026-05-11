@@ -578,7 +578,10 @@
 <div class="toast-container" id="toasts"></div>
 
 <script>
-const state = { servers: [], credentials: [], commands: [], activeTab: 'servers' };
+const state = { servers: [], credentials: [], commands: [] };
+
+const overlay  = document.getElementById('overlay');
+const modalBox = document.getElementById('modal-box');
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
@@ -614,7 +617,11 @@ async function loadAll() {
 // ── Render ────────────────────────────────────────────────────────────────────
 
 function escape(s) {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function emptyRow(colspan, svg, msg) {
+  return `<tr><td colspan="${colspan}"><div class="empty-state">${svg}<p>${msg}</p></div></td></tr>`;
 }
 
 const _expandedGroups = new Set();
@@ -633,14 +640,15 @@ function renderServers() {
   }
 
   if (!servers.length) {
-    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
-      <p>${q ? 'No matching servers.' : 'No servers yet. Add one to get started.'}</p></div></td></tr>`;
+    tbody.innerHTML = emptyRow(7,
+      '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>',
+      q ? 'No matching servers.' : 'No servers yet. Add one to get started.'
+    );
     return;
   }
 
-  // Bucket by group (empty group = ungrouped, rendered inline)
   servers = [...servers].sort((a, b) => a.name.localeCompare(b.name));
+  const credMap = new Map(state.credentials.map(c => [c.id, c]));
   const groups = {};
   for (const s of servers) {
     const g = s.server_group || '';
@@ -649,7 +657,7 @@ function renderServers() {
   }
 
   const serverRow = s => {
-    const cred = state.credentials.find(c => c.id === s.credential_id);
+    const cred = credMap.get(s.credential_id);
     const credCell = cred
       ? `<span class="badge badge-key" style="font-size:11px">${escape(cred.name)}</span>`
       : `<span style="color:var(--muted);font-size:12px">—</span>`;
@@ -668,11 +676,7 @@ function renderServers() {
   };
 
   let html = '';
-  // Ungrouped first
-  if (groups['']) {
-    html += groups[''].map(serverRow).join('');
-  }
-  // Named groups (alphabetical)
+  if (groups['']) html += groups[''].map(serverRow).join('');
   for (const [g, members] of Object.entries(groups).filter(([k]) => k).sort(([a],[b]) => a.localeCompare(b))) {
     const collapsed = !_expandedGroups.has(g);
     const icon = collapsed ? '▶' : '▼';
@@ -684,22 +688,24 @@ function renderServers() {
             ${escape(g)} <span style="font-weight:400;margin-left:6px">(${members.length})</span>
           </span>
           <span style="display:flex;gap:6px">
-            <button class="icon-btn" style="font-size:11px" onclick="openRenameGroupModal('${escape(g).replace(/'/g,"\\'")}')">Rename</button>
-            <button class="icon-btn del" style="font-size:11px" onclick="deleteGroup('${escape(g).replace(/'/g,"\\'")}')">Delete</button>
+            <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(g)}">Rename</button>
+            <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(g)}">Delete</button>
           </span>
         </span>
       </td>
     </tr>`;
-    if (!collapsed) {
-      html += members.map(serverRow).join('');
-    }
+    if (!collapsed) html += members.map(serverRow).join('');
   }
   tbody.innerHTML = html;
 
-  // Bind collapse toggles via data attributes (avoids quote-escaping bugs in onclick)
   tbody.querySelectorAll('.group-header').forEach(tr => {
     tr.addEventListener('click', e => {
-      if (e.target.closest('button')) return; // let edit/delete handle their own clicks
+      const btn = e.target.closest('button[data-action]');
+      if (btn) {
+        if (btn.dataset.action === 'rename') openRenameGroupModal(btn.dataset.group);
+        else deleteGroup(btn.dataset.group);
+        return;
+      }
       toggleGroup(tr.dataset.group);
     });
   });
@@ -714,9 +720,10 @@ function toggleGroup(name) {
 function renderCredentials() {
   const tbody = document.getElementById('credentials-body');
   if (!state.credentials.length) {
-    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state">
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778"/></svg>
-      <p>No credentials yet.</p></div></td></tr>`;
+    tbody.innerHTML = emptyRow(5,
+      '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778"/></svg>',
+      'No credentials yet.'
+    );
     return;
   }
   tbody.innerHTML = state.credentials.map(c => {
@@ -744,9 +751,10 @@ function renderCredentials() {
 function renderCommands() {
   const tbody = document.getElementById('commands-body');
   if (!state.commands.length) {
-    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-      <p>No commands yet.</p></div></td></tr>`;
+    tbody.innerHTML = emptyRow(4,
+      '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+      'No commands yet.'
+    );
     return;
   }
   tbody.innerHTML = state.commands.map(c => `
@@ -778,7 +786,6 @@ function refreshExecuteDropdowns() {
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
 function switchTab(tab) {
-  state.activeTab = tab;
   document.querySelectorAll('[id^="tab-"]').forEach(el => el.style.display = 'none');
   document.getElementById(`tab-${tab}`).style.display = '';
   document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(el => {
@@ -797,26 +804,33 @@ document.addEventListener('change', e => {
       document.getElementById('exec-credential').value = server.credential_id;
     }
   }
+  if (e.target.id === 'f-port') _portTouched = true;
 });
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
 let _editId = null;
-let _editType = null;
+let _portTouched = false;
+
+const modalHeader = title =>
+  `<div class="modal-header"><span class="modal-title">${title}</span><button class="modal-close" onclick="closeModal()">×</button></div>`;
+
+const modalFooter = onSave =>
+  `<div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="${onSave}()">Save</button></div>`;
+
+function showModal(selector = 'input,textarea') {
+  overlay.classList.remove('hidden');
+  if (selector) setTimeout(() => modalBox.querySelector(selector)?.focus(), 50);
+}
 
 function openModal(type, id = null) {
-  _editType = type;
-  _editId   = id;
-  const overlay = document.getElementById('overlay');
-  const box     = document.getElementById('modal-box');
+  _editId = id;
 
   if (type === 'server') {
+    _portTouched = false;
     const s = id ? state.servers.find(x => x.id === id) : null;
-    box.innerHTML = `
-      <div class="modal-header">
-        <span class="modal-title">${s ? 'Edit' : 'Add'} Server</span>
-        <button class="modal-close" onclick="closeModal()">×</button>
-      </div>
+    modalBox.innerHTML = `
+      ${modalHeader(`${s ? 'Edit' : 'Add'} Server`)}
       <div class="form-group">
         <label>Name</label>
         <input id="f-name" value="${escape(s?.name ?? '')}" placeholder="My Linux Server">
@@ -857,19 +871,13 @@ function openModal(type, id = null) {
         <label>Description</label>
         <input id="f-desc" value="${escape(s?.description ?? '')}" placeholder="Optional">
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveServer()">Save</button>
-      </div>`;
+      ${modalFooter('saveServer')}`;
   }
 
   if (type === 'credential') {
     const c = id ? state.credentials.find(x => x.id === id) : null;
-    box.innerHTML = `
-      <div class="modal-header">
-        <span class="modal-title">${c ? 'Edit' : 'Add'} Credential</span>
-        <button class="modal-close" onclick="closeModal()">×</button>
-      </div>
+    modalBox.innerHTML = `
+      ${modalHeader(`${c ? 'Edit' : 'Add'} Credential`)}
       <div class="form-group">
         <label>Name</label>
         <input id="f-name" value="${escape(c?.name ?? '')}" placeholder="prod-key">
@@ -885,7 +893,7 @@ function openModal(type, id = null) {
       </div>
       <div class="form-group">
         <label>Private Key (PEM)</label>
-        <textarea id="f-key" rows="4" placeholder="${c?.has_private_key ? '(unchanged)' : '-----BEGIN ... PRIVATE KEY-----\n...'}">${''}</textarea>
+        <textarea id="f-key" rows="4" placeholder="${c?.has_private_key ? '(unchanged)' : '-----BEGIN ... PRIVATE KEY-----\n...'}"></textarea>
         ${c?.has_private_key ? '<div class="hint field-note">Leave blank to keep existing key</div>' : ''}
         <div class="hint">SSH key takes priority over password for SSH connections</div>
       </div>
@@ -893,19 +901,13 @@ function openModal(type, id = null) {
         <label>Description</label>
         <input id="f-desc" value="${escape(c?.description ?? '')}" placeholder="Optional">
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveCredential()">Save</button>
-      </div>`;
+      ${modalFooter('saveCredential')}`;
   }
 
   if (type === 'command') {
     const c = id ? state.commands.find(x => x.id === id) : null;
-    box.innerHTML = `
-      <div class="modal-header">
-        <span class="modal-title">${c ? 'Edit' : 'Add'} Command</span>
-        <button class="modal-close" onclick="closeModal()">×</button>
-      </div>
+    modalBox.innerHTML = `
+      ${modalHeader(`${c ? 'Edit' : 'Add'} Command`)}
       <div class="form-group">
         <label>Name</label>
         <input id="f-name" value="${escape(c?.name ?? '')}" placeholder="disk usage">
@@ -918,69 +920,54 @@ function openModal(type, id = null) {
         <label>Description</label>
         <input id="f-desc" value="${escape(c?.description ?? '')}" placeholder="Optional">
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveCommand()">Save</button>
-      </div>`;
+      ${modalFooter('saveCommand')}`;
   }
 
-  overlay.classList.remove('hidden');
-  setTimeout(() => box.querySelector('input,textarea')?.focus(), 50);
+  showModal();
 }
 
 function onTypeChange() {
-  const type = document.getElementById('f-type').value;
   const portEl = document.getElementById('f-port');
-  if (!portEl._touched) {
-    portEl.value = type === 'winrm' ? 5985 : 22;
-  }
+  if (!_portTouched) portEl.value = document.getElementById('f-type').value === 'winrm' ? 5985 : 22;
 }
 
-function closeModal() {
-  document.getElementById('overlay').classList.add('hidden');
-}
+function closeModal() { overlay.classList.add('hidden'); }
 
-function closeModalOutside(e) {
-  if (e.target === document.getElementById('overlay')) closeModal();
-}
+function closeModalOutside(e) { if (e.target === overlay) closeModal(); }
 
 function val(id) { return document.getElementById(id)?.value?.trim() ?? ''; }
 
-async function saveServer() {
-  const credVal = document.getElementById('f-credential')?.value;
-  const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22, type: val('f-type'), description: val('f-desc'), server_group: val('f-group'), credential_id: credVal ? parseInt(credVal) : null };
-  if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
+async function saveEntity(resource, label, body) {
   try {
-    if (_editId) await api('PUT', `/api/servers/${_editId}`, body);
-    else         await api('POST', '/api/servers', body);
+    if (_editId) await api('PUT', `/api/${resource}/${_editId}`, body);
+    else         await api('POST', `/api/${resource}`, body);
     closeModal();
     await loadAll();
-    toast(`Server ${_editId ? 'updated' : 'added'}`);
+    toast(`${label} ${_editId ? 'updated' : 'added'}`);
   } catch(e) { toast(e.message, 'fail'); }
+}
+
+async function saveServer() {
+  const credVal = document.getElementById('f-credential')?.value;
+  const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22,
+    type: val('f-type'), description: val('f-desc'), server_group: val('f-group'),
+    credential_id: credVal ? parseInt(credVal) : null };
+  if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
+  await saveEntity('servers', 'Server', body);
 }
 
 async function saveCredential() {
-  const body = { name: val('f-name'), username: val('f-username'), password: val('f-password'), private_key: document.getElementById('f-key')?.value ?? '', description: val('f-desc') };
+  const body = { name: val('f-name'), username: val('f-username'), password: val('f-password'),
+    private_key: document.getElementById('f-key')?.value ?? '', description: val('f-desc') };
   if (!body.name || !body.username) { toast('Name and Username are required', 'fail'); return; }
-  try {
-    if (_editId) await api('PUT', `/api/credentials/${_editId}`, body);
-    else         await api('POST', '/api/credentials', body);
-    closeModal();
-    await loadAll();
-    toast(`Credential ${_editId ? 'updated' : 'added'}`);
-  } catch(e) { toast(e.message, 'fail'); }
+  await saveEntity('credentials', 'Credential', body);
 }
 
 async function saveCommand() {
-  const body = { name: val('f-name'), command: document.getElementById('f-command')?.value?.trim() ?? '', description: val('f-desc') };
+  const body = { name: val('f-name'), command: document.getElementById('f-command')?.value?.trim() ?? '',
+    description: val('f-desc') };
   if (!body.name || !body.command) { toast('Name and Command are required', 'fail'); return; }
-  try {
-    if (_editId) await api('PUT', `/api/commands/${_editId}`, body);
-    else         await api('POST', '/api/commands', body);
-    closeModal();
-    await loadAll();
-    toast(`Command ${_editId ? 'updated' : 'added'}`);
-  } catch(e) { toast(e.message, 'fail'); }
+  await saveEntity('commands', 'Command', body);
 }
 
 async function del(type, id) {
@@ -997,6 +984,7 @@ async function del(type, id) {
 // ── Execute ───────────────────────────────────────────────────────────────────
 
 let _running = false;
+let _term = null;
 
 async function runCommand() {
   if (_running) return;
@@ -1008,8 +996,8 @@ async function runCommand() {
   const server = state.servers.find(s => s.id == serverId);
   const cmd    = state.commands.find(c => c.id == cmdId);
 
-  const term = document.getElementById('terminal');
-  term.innerHTML = `<div class="terminal-line meta">▶ Running "${escape(cmd?.name)}" on ${escape(server?.host)}…</div>`;
+  _term = document.getElementById('terminal');
+  _term.innerHTML = `<div class="terminal-line meta">▶ Running "${escape(cmd?.name)}" on ${escape(server?.host)}…</div>`;
 
   const btn = document.getElementById('run-btn');
   btn.disabled = true;
@@ -1052,7 +1040,7 @@ async function runCommand() {
             appendTerm(ok ? 'success' : 'stderr',
               ok ? '\n✔ Command completed successfully' : `\n✖ Command failed (exit code ${ev.code})`);
           }
-        } catch {}
+        } catch(e) { console.warn('SSE parse error:', e); }
       }
     }
   } catch(e) {
@@ -1065,7 +1053,7 @@ async function runCommand() {
 }
 
 function appendTerm(cls, text) {
-  const term = document.getElementById('terminal');
+  const term = _term ?? document.getElementById('terminal');
   const div = document.createElement('div');
   div.className = `terminal-line ${cls}`;
   div.textContent = text;
@@ -1083,24 +1071,20 @@ function toast(msg, type = 'ok') {
   setTimeout(() => el.remove(), 3500);
 }
 
-// ── Group management ─────────────────────────────────────────────────────────
+// ── Group management ──────────────────────────────────────────────────────────
 
 function openRenameGroupModal(name) {
-  const overlay = document.getElementById('overlay');
-  const box     = document.getElementById('modal-box');
-  box.innerHTML = `
-    <div class="modal-header">
-      <span class="modal-title">Rename Group</span>
-      <button class="modal-close" onclick="closeModal()">×</button>
-    </div>
+  modalBox.innerHTML = `
+    ${modalHeader('Rename Group')}
     <div class="form-group">
       <label>New Name</label>
       <input id="f-group-name" value="${escape(name)}" placeholder="Group name">
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="renameGroup('${name.replace(/'/g,"\\'")}')">Rename</button>
+      <button class="btn btn-primary" id="f-rename-confirm">Rename</button>
     </div>`;
+  document.getElementById('f-rename-confirm').addEventListener('click', () => renameGroup(name));
   overlay.classList.remove('hidden');
   setTimeout(() => document.getElementById('f-group-name')?.select(), 50);
 }
@@ -1131,13 +1115,8 @@ let _importRows = [];
 
 function openImportModal() {
   _importRows = [];
-  const overlay = document.getElementById('overlay');
-  const box     = document.getElementById('modal-box');
-  box.innerHTML = `
-    <div class="modal-header">
-      <span class="modal-title">Import Servers from CSV</span>
-      <button class="modal-close" onclick="closeModal()">×</button>
-    </div>
+  modalBox.innerHTML = `
+    ${modalHeader('Import Servers from CSV')}
     <div class="import-hint">
       Columns: <code>name</code>, <code>host</code>, <code>port</code>, <code>type</code>, <code>credential</code>, <code>description</code>, <code>group</code><br>
       Only <code>name</code> and <code>host</code> are required. <code>type</code> defaults to <code>ssh</code>.
@@ -1157,7 +1136,7 @@ win-dc01,10.0.1.50,5985,winrm,admin-win,Domain controller" oninput="parseCsvInpu
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="import-btn" onclick="runImport()" disabled>Import</button>
     </div>`;
-  overlay.classList.remove('hidden');
+  showModal(null);
 }
 
 function parseCsv(text) {
@@ -1165,7 +1144,6 @@ function parseCsv(text) {
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (!line || line.startsWith('#')) continue;
-    // Simple CSV split (handles quoted fields)
     const cols = [];
     let cur = '', inQ = false;
     for (let i = 0; i < line.length; i++) {
@@ -1206,8 +1184,7 @@ function onCsvFile(e) {
 }
 
 function parseCsvInput() {
-  const text = document.getElementById('f-csv-text').value;
-  _importRows = parseCsv(text);
+  _importRows = parseCsv(document.getElementById('f-csv-text').value);
   renderImportPreview();
 }
 
@@ -1233,7 +1210,7 @@ function renderImportPreview() {
                 <td>${r.credential_name
                   ? r.cred_found
                     ? `<span class="badge badge-key">${escape(r.credential_name)}</span>`
-                    : `<span style="color:var(--warn);font-size:11px">⚠ "${escape(r.credential_name)}" not found</span>`
+                    : `<span style="color:var(--warn);font-size:11px">⚠ &quot;${escape(r.credential_name)}&quot; not found</span>`
                   : '<span style="color:var(--muted);font-size:11px">—</span>'}</td>
                 <td style="color:var(--muted);font-size:12px">${escape(r.description)}</td>
               </tr>`).join('')}
@@ -1264,12 +1241,6 @@ async function runImport() {
     btn.textContent = 'Import';
   }
 }
-
-// ── Port helper ───────────────────────────────────────────────────────────────
-
-document.addEventListener('change', e => {
-  if (e.target.id === 'f-port') e.target._touched = true;
-});
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
