@@ -52,6 +52,12 @@ class CommandRow(Base):
     description = Column(Text, default="")
 
 
+class GroupRow(Base):
+    __tablename__ = "groups"
+    id = Column(Integer, primary_key=True, index=True)
+    path = Column(String, unique=True, nullable=False)
+
+
 Base.metadata.create_all(engine)
 
 
@@ -114,6 +120,10 @@ class ImportResult(BaseModel):
     created: int
     skipped: int
     errors: list[str]
+
+
+class GroupIn(BaseModel):
+    path: str
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -284,11 +294,27 @@ class GroupRename(BaseModel):
 
 @app.get("/api/groups")
 def list_groups():
+    """Return all known folder paths — explicit + those derived from server assignments."""
     with Session() as db:
-        rows = db.query(ServerRow.server_group).filter(
-            ServerRow.server_group != ""
-        ).distinct().order_by(ServerRow.server_group).all()
-        return [r[0] for r in rows]
+        explicit = {r.path for r in db.query(GroupRow).all()}
+        derived: set[str] = set()
+        for (sg,) in db.query(ServerRow.server_group).filter(ServerRow.server_group != "").all():
+            parts = sg.split("/")
+            for i in range(1, len(parts) + 1):
+                derived.add("/".join(parts[:i]))
+        return sorted(explicit | derived)
+
+
+@app.post("/api/groups", status_code=201)
+def create_group(data: GroupIn):
+    path = data.path.strip().strip("/")
+    if not path:
+        raise HTTPException(400, "Path cannot be empty")
+    with Session() as db:
+        if not db.query(GroupRow.id).filter_by(path=path).scalar():
+            db.add(GroupRow(path=path))
+            db.commit()
+    return {"path": path}
 
 
 @app.put("/api/groups/rename")
@@ -303,6 +329,9 @@ def rename_group(data: GroupRename):
         )
         for row in db.query(ServerRow).filter(ServerRow.server_group.like(prefix + "%")).all():
             row.server_group = new + "/" + row.server_group[len(prefix):]
+        db.query(GroupRow).filter(GroupRow.path == old).update({GroupRow.path: new})
+        for row in db.query(GroupRow).filter(GroupRow.path.like(prefix + "%")).all():
+            row.path = new + "/" + row.path[len(prefix):]
         db.commit()
     return {"ok": True}
 
@@ -314,6 +343,10 @@ def delete_group(name: str):
             or_(ServerRow.server_group == name,
                 ServerRow.server_group.like(name + "/%"))
         ).update({ServerRow.server_group: ""}, synchronize_session="fetch")
+        db.query(GroupRow).filter(
+            or_(GroupRow.path == name,
+                GroupRow.path.like(name + "/%"))
+        ).delete(synchronize_session="fetch")
         db.commit()
 
 

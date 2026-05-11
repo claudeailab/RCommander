@@ -366,6 +366,29 @@
   }
   .mobile-nav-item.active { color: var(--accent-h); }
 
+  /* ── Folder tree ── */
+  .folder-tree {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow-y: auto;
+    background: #0d1117;
+  }
+  .folder-node {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text);
+    user-select: none;
+    white-space: nowrap;
+  }
+  .folder-node:hover { background: #1f2937; }
+  .folder-node.f-selected { background: #1c3a5e; color: #58a6ff; }
+  .folder-node.f-none { color: var(--muted); font-style: italic; }
+  .mgr-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
   @media (max-width: 768px) {
     .sidebar { display: none; }
     .mobile-nav { display: block; }
@@ -437,6 +460,10 @@
     <div class="topbar">
       <span class="page-title">Servers</span>
       <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" onclick="openManageFoldersModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Folders
+        </button>
         <button class="btn btn-ghost" onclick="openImportModal()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           Import CSV
@@ -578,7 +605,7 @@
 <div class="toast-container" id="toasts"></div>
 
 <script>
-const state = { servers: [], credentials: [], commands: [] };
+const state = { servers: [], credentials: [], commands: [], groups: [] };
 
 const overlay  = document.getElementById('overlay');
 const modalBox = document.getElementById('modal-box');
@@ -600,14 +627,16 @@ async function api(method, path, body) {
 }
 
 async function loadAll() {
-  const [servers, credentials, commands] = await Promise.all([
+  const [servers, credentials, commands, groups] = await Promise.all([
     api('GET', '/api/servers'),
     api('GET', '/api/credentials'),
     api('GET', '/api/commands'),
+    api('GET', '/api/groups'),
   ]);
   state.servers     = servers;
   state.credentials = credentials;
   state.commands    = commands;
+  state.groups      = groups;
   renderServers();
   renderCredentials();
   renderCommands();
@@ -622,6 +651,42 @@ function escape(s) {
 
 function emptyRow(colspan, svg, msg) {
   return `<tr><td colspan="${colspan}"><div class="empty-state">${svg}<p>${msg}</p></div></td></tr>`;
+}
+
+// ── Folder tree helpers ───────────────────────────────────────────────────────
+
+function buildFolderNodes() {
+  const nodes = {};
+  const roots = new Set();
+  for (const path of state.groups) {
+    if (!nodes[path]) nodes[path] = new Set();
+    const parts = path.split('/');
+    if (parts.length === 1) roots.add(path);
+    else {
+      const parent = parts.slice(0, -1).join('/');
+      if (!nodes[parent]) nodes[parent] = new Set();
+      nodes[parent].add(path);
+    }
+  }
+  return { nodes, roots };
+}
+
+function _folderNodeHTML(nodes, path, selectedPath, indent) {
+  const label = path.split('/').pop();
+  const selected = path === selectedPath;
+  const children = [...(nodes[path] || new Set())].sort();
+  const padLeft = 12 + indent * 16;
+  let html = `<div class="folder-node${selected ? ' f-selected' : ''}" data-path="${escape(path)}" style="padding-left:${padLeft}px">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    ${escape(label)}
+  </div>`;
+  for (const child of children) html += _folderNodeHTML(nodes, child, selectedPath, indent + 1);
+  return html;
+}
+
+function folderTreeHTML(selectedPath = '') {
+  const { nodes, roots } = buildFolderNodes();
+  return [...roots].sort().map(r => _folderNodeHTML(nodes, r, selectedPath, 0)).join('');
 }
 
 const _expandedGroups = new Set();
@@ -703,8 +768,6 @@ function renderServers() {
             ${escape(label)} <span style="font-weight:400;margin-left:6px">(${countAll(path)})</span>
           </span>
           <span style="display:flex;gap:6px">
-            <button class="icon-btn" style="font-size:11px" data-action="addsub" data-group="${escape(path)}">+ Subfolder</button>
-            <button class="icon-btn" style="font-size:11px" data-action="addserver" data-group="${escape(path)}">+ Server</button>
             <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
             <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">Delete</button>
           </span>
@@ -728,11 +791,8 @@ function renderServers() {
     tr.addEventListener('click', e => {
       const btn = e.target.closest('button[data-action]');
       if (btn) {
-        const g = btn.dataset.group;
-        if (btn.dataset.action === 'rename')    openRenameGroupModal(g);
-        else if (btn.dataset.action === 'delete')    deleteGroup(g);
-        else if (btn.dataset.action === 'addserver') openModal('server', null, g);
-        else if (btn.dataset.action === 'addsub')    openAddSubfolderModal(g);
+        if (btn.dataset.action === 'rename') openRenameGroupModal(btn.dataset.group);
+        else deleteGroup(btn.dataset.group);
         return;
       }
       toggleGroup(tr.dataset.group);
@@ -883,19 +943,13 @@ function openModal(type, id = null, defaultGroup = '') {
         </select>
       </div>
       <div class="form-group">
-        <label>Group</label>
-        <input id="f-group" value="${escape(groupValue)}" placeholder="e.g. Production, Lab, Windows" list="group-suggestions">
-        <datalist id="group-suggestions">
-          ${(() => {
-            const paths = new Set();
-            for (const x of state.servers) {
-              if (!x.server_group) continue;
-              const parts = x.server_group.split('/');
-              for (let i = 1; i <= parts.length; i++) paths.add(parts.slice(0, i).join('/'));
-            }
-            return [...paths].sort().map(g => `<option value="${escape(g)}">`).join('');
-          })()}
-        </datalist>
+        <label>Folder</label>
+        <div class="folder-tree" id="f-group-tree" style="max-height:180px">
+          <div class="folder-node f-none${!groupValue ? ' f-selected' : ''}" data-path="" style="padding-left:12px">(no folder)</div>
+          ${folderTreeHTML(groupValue)}
+        </div>
+        <input type="hidden" id="f-group" value="${escape(groupValue)}">
+        <div class="hint" id="f-group-hint">${groupValue ? 'Folder: ' + escape(groupValue) : 'No folder selected'}</div>
       </div>
       <div class="form-group">
         <label>Default Credential</label>
@@ -962,6 +1016,20 @@ function openModal(type, id = null, defaultGroup = '') {
   }
 
   showModal();
+
+  if (type === 'server') {
+    const tree = modalBox.querySelector('#f-group-tree');
+    const hidden = modalBox.querySelector('#f-group');
+    const hint = modalBox.querySelector('#f-group-hint');
+    tree?.querySelectorAll('.folder-node').forEach(el => {
+      el.addEventListener('click', () => {
+        tree.querySelectorAll('.folder-node').forEach(n => n.classList.remove('f-selected'));
+        el.classList.add('f-selected');
+        hidden.value = el.dataset.path;
+        hint.textContent = el.dataset.path ? 'Folder: ' + el.dataset.path : 'No folder selected';
+      });
+    });
+  }
 }
 
 function onTypeChange() {
@@ -1109,70 +1177,162 @@ function toast(msg, type = 'ok') {
   setTimeout(() => el.remove(), 3500);
 }
 
-// ── Group management ──────────────────────────────────────────────────────────
+// ── Manage Folders modal ──────────────────────────────────────────────────────
 
-function openAddSubfolderModal(parentPath) {
-  modalBox.innerHTML = `
-    ${modalHeader('New Subfolder')}
-    <div class="hint" style="margin-bottom:4px;color:var(--muted)">Inside: ${escape(parentPath)}</div>
-    <div class="form-group">
-      <label>Subfolder Name</label>
-      <input id="f-subfolder-name" placeholder="e.g. Web Servers">
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="f-subfolder-confirm">Next: Add Server</button>
-    </div>`;
-  document.getElementById('f-subfolder-confirm').addEventListener('click', () => {
-    const name = document.getElementById('f-subfolder-name')?.value?.trim();
-    if (!name) { toast('Subfolder name cannot be empty', 'fail'); return; }
-    openModal('server', null, parentPath + '/' + name);
-  });
-  showModal('#f-subfolder-name');
+let _mgrSelected = '';
+
+function openManageFoldersModal() {
+  _mgrSelected = '';
+  _renderMgrModal();
 }
+
+function _renderMgrModal() {
+  const tree = folderTreeHTML(_mgrSelected);
+  const hasSel = !!_mgrSelected;
+  modalBox.innerHTML = `
+    ${modalHeader('Manage Folders')}
+    <div class="folder-tree" style="min-height:100px;max-height:260px" id="mgr-tree">
+      ${tree || '<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">No folders yet.</div>'}
+    </div>
+    ${_mgrSelected ? `<div class="hint" style="margin-top:6px">Selected: <strong>${escape(_mgrSelected)}</strong></div>` : ''}
+    <div class="mgr-actions">
+      <button class="btn btn-ghost" id="mgr-new-root">+ New Folder</button>
+      <button class="btn btn-ghost" id="mgr-new-sub" ${!hasSel ? 'disabled' : ''}>+ Subfolder</button>
+      <button class="btn btn-ghost" id="mgr-rename" ${!hasSel ? 'disabled' : ''}>Rename</button>
+      <button class="btn btn-danger" id="mgr-delete" ${!hasSel ? 'disabled' : ''}>Delete</button>
+    </div>
+    <div id="mgr-input-area"></div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeModal()">Done</button>
+    </div>`;
+
+  modalBox.querySelector('#mgr-tree')?.querySelectorAll('.folder-node').forEach(el => {
+    el.addEventListener('click', () => {
+      _mgrSelected = _mgrSelected === el.dataset.path ? '' : el.dataset.path;
+      _renderMgrModal();
+    });
+  });
+  modalBox.querySelector('#mgr-new-root')?.addEventListener('click', () => _mgrShowInput(''));
+  modalBox.querySelector('#mgr-new-sub')?.addEventListener('click', () => _mgrShowInput(_mgrSelected));
+  modalBox.querySelector('#mgr-rename')?.addEventListener('click', () => _mgrShowRename(_mgrSelected));
+  modalBox.querySelector('#mgr-delete')?.addEventListener('click', () => _mgrDelete(_mgrSelected));
+
+  overlay.classList.remove('hidden');
+}
+
+function _mgrShowInput(parentPath) {
+  document.getElementById('mgr-input-area').innerHTML = `
+    <div class="form-group" style="margin-top:8px">
+      ${parentPath ? `<div class="hint" style="margin-bottom:4px">Inside: <strong>${escape(parentPath)}</strong></div>` : '<div class="hint" style="margin-bottom:4px">New root folder</div>'}
+      <div style="display:flex;gap:8px">
+        <input id="mgr-name-input" placeholder="Folder name" style="flex:1">
+        <button class="btn btn-primary" id="mgr-create-btn">Create</button>
+        <button class="btn btn-ghost" id="mgr-cancel-btn">Cancel</button>
+      </div>
+    </div>`;
+  const input = document.getElementById('mgr-name-input');
+  input?.focus();
+  input?.addEventListener('keydown', e => { if (e.key === 'Enter') _mgrCreate(parentPath); });
+  document.getElementById('mgr-create-btn')?.addEventListener('click', () => _mgrCreate(parentPath));
+  document.getElementById('mgr-cancel-btn')?.addEventListener('click', () => { document.getElementById('mgr-input-area').innerHTML = ''; });
+}
+
+function _mgrShowRename(path) {
+  const label = path.split('/').pop();
+  document.getElementById('mgr-input-area').innerHTML = `
+    <div class="form-group" style="margin-top:8px">
+      <div style="display:flex;gap:8px">
+        <input id="mgr-name-input" value="${escape(label)}" style="flex:1">
+        <button class="btn btn-primary" id="mgr-rename-btn">Rename</button>
+        <button class="btn btn-ghost" id="mgr-cancel-btn">Cancel</button>
+      </div>
+    </div>`;
+  const input = document.getElementById('mgr-name-input');
+  input?.select();
+  input?.addEventListener('keydown', e => { if (e.key === 'Enter') _mgrRename(path); });
+  document.getElementById('mgr-rename-btn')?.addEventListener('click', () => _mgrRename(path));
+  document.getElementById('mgr-cancel-btn')?.addEventListener('click', () => { document.getElementById('mgr-input-area').innerHTML = ''; });
+}
+
+async function _mgrCreate(parentPath) {
+  const name = document.getElementById('mgr-name-input')?.value?.trim();
+  if (!name) return;
+  const path = parentPath ? parentPath + '/' + name : name;
+  try {
+    await api('POST', '/api/groups', { path });
+    await loadAll();
+    _mgrSelected = path;
+    _renderMgrModal();
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
+async function _mgrRename(oldPath) {
+  const newLabel = document.getElementById('mgr-name-input')?.value?.trim();
+  if (!newLabel) return;
+  const parts = oldPath.split('/');
+  parts[parts.length - 1] = newLabel;
+  const newPath = parts.join('/');
+  try {
+    await api('PUT', '/api/groups/rename', { old_name: oldPath, new_name: newPath });
+    await loadAll();
+    _mgrSelected = newPath;
+    _renderMgrModal();
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
+async function _mgrDelete(path) {
+  const hasChildren = state.groups.some(g => g.startsWith(path + '/'));
+  const detail = hasChildren
+    ? 'This folder and all subfolders will be deleted. Servers will be ungrouped.'
+    : 'Servers in this folder will be ungrouped.';
+  if (!confirm(`Delete "${path}"?\n\n${detail}`)) return;
+  try {
+    await api('DELETE', `/api/groups/${encodeURIComponent(path)}`);
+    await loadAll();
+    _mgrSelected = '';
+    _renderMgrModal();
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
+// ── Inline group header actions (quick rename/delete from server list) ─────────
 
 function openRenameGroupModal(fullPath) {
   const parts = fullPath.split('/');
   const label = parts.pop();
   const parentPath = parts.join('/');
   modalBox.innerHTML = `
-    ${modalHeader('Rename Group')}
-    ${parentPath ? `<div class="hint" style="margin-bottom:4px;color:var(--muted)">Inside: ${escape(parentPath)}</div>` : ''}
+    ${modalHeader('Rename Folder')}
+    ${parentPath ? `<div class="hint" style="margin-bottom:4px">Inside: ${escape(parentPath)}</div>` : ''}
     <div class="form-group">
       <label>New Name</label>
-      <input id="f-group-name" value="${escape(label)}" placeholder="Group name">
+      <input id="f-group-name" value="${escape(label)}" placeholder="Folder name">
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="f-rename-confirm">Rename</button>
     </div>`;
-  document.getElementById('f-rename-confirm').addEventListener('click', () => renameGroup(fullPath, parentPath));
+  document.getElementById('f-rename-confirm').addEventListener('click', () => {
+    const newLabel = document.getElementById('f-group-name')?.value?.trim();
+    if (!newLabel) { toast('Name cannot be empty', 'fail'); return; }
+    const newPath = parentPath ? parentPath + '/' + newLabel : newLabel;
+    api('PUT', '/api/groups/rename', { old_name: fullPath, new_name: newPath })
+      .then(() => { closeModal(); loadAll(); toast('Folder renamed'); })
+      .catch(e => toast(e.message, 'fail'));
+  });
   overlay.classList.remove('hidden');
   setTimeout(() => document.getElementById('f-group-name')?.select(), 50);
 }
 
-async function renameGroup(oldPath, parentPath) {
-  const newLabel = document.getElementById('f-group-name')?.value?.trim();
-  if (!newLabel) { toast('Name cannot be empty', 'fail'); return; }
-  const newPath = parentPath ? parentPath + '/' + newLabel : newLabel;
-  try {
-    await api('PUT', '/api/groups/rename', { old_name: oldPath, new_name: newPath });
-    closeModal();
-    await loadAll();
-    toast('Group renamed');
-  } catch(e) { toast(e.message, 'fail'); }
-}
-
 async function deleteGroup(path) {
-  const hasChildren = state.servers.some(s => s.server_group.startsWith(path + '/'));
+  const hasChildren = state.groups.some(g => g.startsWith(path + '/'));
   const detail = hasChildren
-    ? 'All servers in this group and its subgroups will be ungrouped.'
-    : 'Servers in this group will be ungrouped, not deleted.';
-  if (!confirm(`Delete group "${path}"?\n\n${detail}`)) return;
+    ? 'This folder and all subfolders will be deleted. Servers will be ungrouped.'
+    : 'Servers in this folder will be ungrouped.';
+  if (!confirm(`Delete "${path}"?\n\n${detail}`)) return;
   try {
     await api('DELETE', `/api/groups/${encodeURIComponent(path)}`);
     await loadAll();
-    toast(`Group deleted`);
+    toast('Folder deleted');
   } catch(e) { toast(e.message, 'fail'); }
 }
 
