@@ -1,4 +1,3 @@
-services:
   rcommander:
     image: aristosv/rcommander
     container_name: rcommander

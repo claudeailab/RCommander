@@ -16,7 +16,6 @@ A self-hosted web UI for running commands on remote servers over SSH (Linux) and
 ## Quick Start
 
 ```yaml
-services:
   rcommander:
     image: aristosv/rcommander
     container_name: rcommander
@@ -24,7 +23,7 @@ services:
     restart: unless-stopped
     user: "0"
     environment:
-      TZ: America/New_York
+      TZ: ${TZ}
     ports:
       - 8090:8090
     volumes:
@@ -42,5 +41,3 @@ winrm quickconfig
 winrm set winrm/config/service/Auth '@{Basic="true"}'
 winrm set winrm/config/service '@{AllowUnencrypted="true"}'
 ```
-
-Default port: **5985** (HTTP) or **5986** (HTTPS).
