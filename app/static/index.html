@@ -675,10 +675,18 @@ function renderServers() {
   for (const [g, members] of Object.entries(groups).filter(([k]) => k)) {
     const collapsed = _collapsedGroups.has(g);
     const icon = collapsed ? '▶' : '▼';
-    html += `<tr class="group-header" onclick="toggleGroup(${JSON.stringify(g)})" style="cursor:pointer;background:#111820;user-select:none">
-      <td colspan="7" style="padding:8px 16px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px">
-        <span style="margin-right:8px;font-size:10px">${icon}</span>
-        ${escape(g)} <span style="font-weight:400;margin-left:6px">(${members.length})</span>
+    html += `<tr class="group-header" data-group="${escape(g)}" style="cursor:pointer;background:#111820;user-select:none">
+      <td colspan="7" style="padding:7px 16px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px">
+        <span style="display:flex;align-items:center;justify-content:space-between">
+          <span>
+            <span style="margin-right:8px;font-size:10px">${icon}</span>
+            ${escape(g)} <span style="font-weight:400;margin-left:6px">(${members.length})</span>
+          </span>
+          <span style="display:flex;gap:6px">
+            <button class="icon-btn" style="font-size:11px" onclick="openRenameGroupModal('${escape(g).replace(/'/g,"\\'")}')">Rename</button>
+            <button class="icon-btn del" style="font-size:11px" onclick="deleteGroup('${escape(g).replace(/'/g,"\\'")}')">Delete</button>
+          </span>
+        </span>
       </td>
     </tr>`;
     if (!collapsed) {
@@ -686,6 +694,14 @@ function renderServers() {
     }
   }
   tbody.innerHTML = html;
+
+  // Bind collapse toggles via data attributes (avoids quote-escaping bugs in onclick)
+  tbody.querySelectorAll('.group-header').forEach(tr => {
+    tr.addEventListener('click', e => {
+      if (e.target.closest('button')) return; // let edit/delete handle their own clicks
+      toggleGroup(tr.dataset.group);
+    });
+  });
 }
 
 function toggleGroup(name) {
@@ -1063,6 +1079,48 @@ function toast(msg, type = 'ok') {
   el.innerHTML = `${type === 'ok' ? '✓' : '✗'} ${msg}`;
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// ── Group management ─────────────────────────────────────────────────────────
+
+function openRenameGroupModal(name) {
+  const overlay = document.getElementById('overlay');
+  const box     = document.getElementById('modal-box');
+  box.innerHTML = `
+    <div class="modal-header">
+      <span class="modal-title">Rename Group</span>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="form-group">
+      <label>New Name</label>
+      <input id="f-group-name" value="${escape(name)}" placeholder="Group name">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="renameGroup('${name.replace(/'/g,"\\'")}')">Rename</button>
+    </div>`;
+  overlay.classList.remove('hidden');
+  setTimeout(() => document.getElementById('f-group-name')?.select(), 50);
+}
+
+async function renameGroup(oldName) {
+  const newName = document.getElementById('f-group-name')?.value?.trim();
+  if (!newName) { toast('Name cannot be empty', 'fail'); return; }
+  try {
+    await api('PUT', '/api/groups/rename', { old_name: oldName, new_name: newName });
+    closeModal();
+    await loadAll();
+    toast('Group renamed');
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
+async function deleteGroup(name) {
+  if (!confirm(`Delete group "${name}"?\n\nServers in this group will be ungrouped, not deleted.`)) return;
+  try {
+    await api('DELETE', `/api/groups/${encodeURIComponent(name)}`);
+    await loadAll();
+    toast(`Group "${name}" deleted`);
+  } catch(e) { toast(e.message, 'fail'); }
 }
 
 // ── CSV Import ────────────────────────────────────────────────────────────────

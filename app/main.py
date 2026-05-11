@@ -272,6 +272,43 @@ def delete_server(server_id: int):
         db.commit()
 
 
+# ── Groups ────────────────────────────────────────────────────────────────────
+
+class GroupRename(BaseModel):
+    old_name: str
+    new_name: str
+
+
+@app.get("/api/groups")
+def list_groups():
+    with Session() as db:
+        rows = db.query(ServerRow.server_group).filter(
+            ServerRow.server_group != ""
+        ).distinct().order_by(ServerRow.server_group).all()
+        return [r[0] for r in rows]
+
+
+@app.put("/api/groups/rename")
+def rename_group(data: GroupRename):
+    if not data.new_name.strip():
+        raise HTTPException(400, "New name cannot be empty")
+    with Session() as db:
+        db.query(ServerRow).filter(ServerRow.server_group == data.old_name).update(
+            {ServerRow.server_group: data.new_name.strip()}
+        )
+        db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/groups/{name}", status_code=204)
+def delete_group(name: str):
+    with Session() as db:
+        db.query(ServerRow).filter(ServerRow.server_group == name).update(
+            {ServerRow.server_group: ""}
+        )
+        db.commit()
+
+
 # ── Credentials ───────────────────────────────────────────────────────────────
 
 @app.get("/api/credentials")
