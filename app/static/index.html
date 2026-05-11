@@ -196,6 +196,9 @@
     gap: 16px;
   }
   .exec-panel h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
+  #exec-folder-path { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+  #exec-folder-path:empty { display: none; }
+  .exec-folder-sel { width: 100%; }
   .terminal {
     background: #010409;
     border: 1px solid var(--border);
@@ -563,6 +566,7 @@
         <div class="exec-panel">
           <div>
             <h3>SERVER</h3>
+            <div id="exec-folder-path"></div>
             <select id="exec-server">
               <option value="">— select server —</option>
             </select>
@@ -860,6 +864,77 @@ function renderCommands() {
     </tr>`).join('');
 }
 
+let _execPath = null; // null = no folder selected yet; '' = root (ungrouped)
+
+function _execChildFolders(parentPath) {
+  const prefix = parentPath === '' ? '' : parentPath + '/';
+  const depth  = parentPath === '' ? 0 : parentPath.split('/').length;
+  return state.groups
+    .filter(g => {
+      if (parentPath === '') return g.split('/').length === 1;
+      return g.startsWith(prefix) && g.split('/').length === depth + 1;
+    })
+    .sort();
+}
+
+function _renderExecFolderPath() {
+  const container = document.getElementById('exec-folder-path');
+  if (!container) return;
+
+  // Build prefix chain: e.g. "A/B/C" → ["A", "A/B", "A/B/C"]
+  let html = '';
+  const levels = _execPath
+    ? _execPath.split('/').map((_, i, arr) => arr.slice(0, i + 1).join('/'))
+    : [];
+
+  // Always show a top-level folder select
+  const topFolders = _execChildFolders('');
+  if (topFolders.length > 0) {
+    const topVal = levels.length > 0 ? levels[0] : '';
+    html += `<select class="exec-folder-sel" data-level="0" onchange="_onExecFolderChange(this)">
+      <option value="">— select folder —</option>` +
+      topFolders.map(f => `<option value="${escape(f)}" ${f===topVal?'selected':''}>${escape(f)}</option>`).join('') +
+      `</select>`;
+
+    // Show subsequent levels if a folder is selected at each level
+    for (let i = 0; i < levels.length; i++) {
+      const children = _execChildFolders(levels[i]);
+      if (children.length === 0) break;
+      const childVal = levels[i + 1] || '';
+      html += `<select class="exec-folder-sel" data-level="${i + 1}" onchange="_onExecFolderChange(this)">
+        <option value="">— select subfolder —</option>` +
+        children.map(f => `<option value="${escape(f)}" ${f===childVal?'selected':''}>${escape(f.split('/').pop())}</option>`).join('') +
+        `</select>`;
+    }
+  }
+
+  container.innerHTML = html;
+  _updateExecServerOptions();
+}
+
+function _onExecFolderChange(sel) {
+  const val = sel.value;
+  _execPath = val === '' ? null : val;
+  _renderExecFolderPath();
+}
+
+function _updateExecServerOptions() {
+  const el = document.getElementById('exec-server');
+  const cur = el.value;
+  let servers;
+  if (_execPath === null) {
+    servers = state.servers;
+  } else {
+    servers = state.servers.filter(s => s.server_group === _execPath);
+  }
+  el.innerHTML = `<option value="">— select server —</option>` +
+    servers.map(s => `<option value="${s.id}" ${s.id==cur?'selected':''}>${escape(s.name)}</option>`).join('');
+  // Restore credential auto-fill if previous server is still in list
+  if (cur && !servers.find(s => s.id == cur)) {
+    el.value = '';
+  }
+}
+
 function refreshExecuteDropdowns() {
   const sel = (id, items, label) => {
     const el = document.getElementById(id);
@@ -867,7 +942,7 @@ function refreshExecuteDropdowns() {
     el.innerHTML = `<option value="">— ${label} —</option>` +
       items.map(i => `<option value="${i.id}" ${i.id==cur?'selected':''}>${escape(i.name)}</option>`).join('');
   };
-  sel('exec-server',     state.servers,     'select server');
+  _renderExecFolderPath();
   sel('exec-credential', state.credentials, 'select credentials');
   sel('exec-command',    state.commands,    'select command');
 }
