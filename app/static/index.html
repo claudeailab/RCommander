@@ -572,12 +572,6 @@
             </select>
           </div>
           <div>
-            <h3>CREDENTIALS</h3>
-            <select id="exec-credential">
-              <option value="">— select credentials —</option>
-            </select>
-          </div>
-          <div>
             <h3>COMMAND</h3>
             <select id="exec-command">
               <option value="">— select command —</option>
@@ -943,8 +937,7 @@ function refreshExecuteDropdowns() {
       items.map(i => `<option value="${i.id}" ${i.id==cur?'selected':''}>${escape(i.name)}</option>`).join('');
   };
   _renderExecFolderPath();
-  sel('exec-credential', state.credentials, 'select credentials');
-  sel('exec-command',    state.commands,    'select command');
+  sel('exec-command', state.commands, 'select command');
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -962,12 +955,6 @@ document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(el => {
 });
 
 document.addEventListener('change', e => {
-  if (e.target.id === 'exec-server') {
-    const server = state.servers.find(s => s.id == e.target.value);
-    if (server?.credential_id) {
-      document.getElementById('exec-credential').value = server.credential_id;
-    }
-  }
   if (e.target.id === 'f-port') _portTouched = true;
 });
 
@@ -1170,12 +1157,13 @@ let _term = null;
 async function runCommand() {
   if (_running) return;
   const serverId = document.getElementById('exec-server').value;
-  const credId   = document.getElementById('exec-credential').value;
   const cmdId    = document.getElementById('exec-command').value;
-  if (!serverId || !credId || !cmdId) { toast('Select server, credentials, and command', 'fail'); return; }
+  if (!serverId || !cmdId) { toast('Select server and command', 'fail'); return; }
 
   const server = state.servers.find(s => s.id == serverId);
-  const cmd    = state.commands.find(c => c.id == cmdId);
+  const credId = server?.credential_id;
+  if (!credId) { toast('Server has no credentials configured', 'fail'); return; }
+  const cmd = state.commands.find(c => c.id == cmdId);
 
   _term = document.getElementById('terminal');
   _term.innerHTML = `<div class="terminal-line meta">▶ Running "${escape(cmd?.name)}" on ${escape(server?.host)}…</div>`;
