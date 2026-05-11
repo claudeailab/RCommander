@@ -460,6 +460,12 @@
               <th class="col-desc">Description</th>
               <th></th>
             </tr>
+            <tr id="servers-group-filter-row">
+              <td colspan="7" style="padding:8px 16px;background:#0d1117;border-bottom:1px solid var(--border)">
+                <input id="server-filter" placeholder="Filter by name, host or group…" oninput="renderServers()"
+                  style="max-width:320px;padding:5px 10px;font-size:12px">
+              </td>
+            </tr>
           </thead>
           <tbody id="servers-body"></tbody>
         </table>
@@ -611,35 +617,81 @@ function escape(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+const _collapsedGroups = new Set();
+
 function renderServers() {
   const tbody = document.getElementById('servers-body');
-  if (!state.servers.length) {
+  const q = (document.getElementById('server-filter')?.value ?? '').toLowerCase();
+
+  let servers = state.servers;
+  if (q) {
+    servers = servers.filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      s.host.toLowerCase().includes(q) ||
+      (s.group||'').toLowerCase().includes(q)
+    );
+  }
+
+  if (!servers.length) {
     tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
-      <p>No servers yet. Add one to get started.</p></div></td></tr>`;
+      <p>${q ? 'No matching servers.' : 'No servers yet. Add one to get started.'}</p></div></td></tr>`;
     return;
   }
-  tbody.innerHTML = state.servers.map(s => {
+
+  // Bucket by group (empty group = ungrouped, rendered inline)
+  const groups = {};
+  for (const s of servers) {
+    const g = s.group || '';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(s);
+  }
+
+  const serverRow = s => {
     const cred = state.credentials.find(c => c.id === s.credential_id);
     const credCell = cred
       ? `<span class="badge badge-key" style="font-size:11px">${escape(cred.name)}</span>`
       : `<span style="color:var(--muted);font-size:12px">—</span>`;
-    return `
-    <tr>
+    return `<tr>
       <td><strong>${escape(s.name)}</strong></td>
       <td><code style="color:var(--blue)">${escape(s.host)}</code></td>
       <td>${escape(s.port)}</td>
       <td><span class="badge badge-${s.type}">${s.type.toUpperCase()}</span></td>
       <td>${credCell}</td>
       <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
-      <td>
-        <div class="actions">
-          <button class="icon-btn" onclick="openModal('server',${s.id})">Edit</button>
-          <button class="icon-btn del" onclick="del('server',${s.id})">Delete</button>
-        </div>
+      <td><div class="actions">
+        <button class="icon-btn" onclick="openModal('server',${s.id})">Edit</button>
+        <button class="icon-btn del" onclick="del('server',${s.id})">Delete</button>
+      </div></td>
+    </tr>`;
+  };
+
+  let html = '';
+  // Ungrouped first
+  if (groups['']) {
+    html += groups[''].map(serverRow).join('');
+  }
+  // Named groups
+  for (const [g, members] of Object.entries(groups).filter(([k]) => k)) {
+    const collapsed = _collapsedGroups.has(g);
+    const icon = collapsed ? '▶' : '▼';
+    html += `<tr class="group-header" onclick="toggleGroup(${JSON.stringify(g)})" style="cursor:pointer;background:#111820;user-select:none">
+      <td colspan="7" style="padding:8px 16px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px">
+        <span style="margin-right:8px;font-size:10px">${icon}</span>
+        ${escape(g)} <span style="font-weight:400;margin-left:6px">(${members.length})</span>
       </td>
     </tr>`;
-  }).join('');
+    if (!collapsed) {
+      html += members.map(serverRow).join('');
+    }
+  }
+  tbody.innerHTML = html;
+}
+
+function toggleGroup(name) {
+  if (_collapsedGroups.has(name)) _collapsedGroups.delete(name);
+  else _collapsedGroups.add(name);
+  renderServers();
 }
 
 function renderCredentials() {
@@ -770,6 +822,13 @@ function openModal(type, id = null) {
         </select>
       </div>
       <div class="form-group">
+        <label>Group</label>
+        <input id="f-group" value="${escape(s?.group ?? '')}" placeholder="e.g. Production, Lab, Windows" list="group-suggestions">
+        <datalist id="group-suggestions">
+          ${[...new Set(state.servers.map(x => x.group).filter(Boolean))].map(g => `<option value="${escape(g)}">`).join('')}
+        </datalist>
+      </div>
+      <div class="form-group">
         <label>Default Credential</label>
         <select id="f-credential">
           <option value="">— none —</option>
@@ -872,7 +931,7 @@ function val(id) { return document.getElementById(id)?.value?.trim() ?? ''; }
 
 async function saveServer() {
   const credVal = document.getElementById('f-credential')?.value;
-  const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22, type: val('f-type'), description: val('f-desc'), credential_id: credVal ? parseInt(credVal) : null };
+  const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22, type: val('f-type'), description: val('f-desc'), group: val('f-group'), credential_id: credVal ? parseInt(credVal) : null };
   if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
   try {
     if (_editId) await api('PUT', `/api/servers/${_editId}`, body);
@@ -1020,9 +1079,9 @@ function openImportModal() {
       <button class="modal-close" onclick="closeModal()">×</button>
     </div>
     <div class="import-hint">
-      Columns: <code>name</code>, <code>host</code>, <code>port</code>, <code>type</code>, <code>credential</code>, <code>description</code><br>
+      Columns: <code>name</code>, <code>host</code>, <code>port</code>, <code>type</code>, <code>credential</code>, <code>description</code>, <code>group</code><br>
       Only <code>name</code> and <code>host</code> are required. <code>type</code> defaults to <code>ssh</code>.
-      <code>credential</code> is matched by name.
+      <code>credential</code> is matched by name. <code>group</code> sets the folder.
     </div>
     <div class="form-group">
       <label>Upload file</label>
@@ -1056,7 +1115,7 @@ function parseCsv(text) {
       else cur += ch;
     }
     cols.push(cur.trim());
-    const [name='', host='', port='', type='', credential='', description=''] = cols;
+    const [name='', host='', port='', type='', credential='', description='', group=''] = cols;
     if (!name || !host) continue;
     const serverType = (type.toLowerCase() === 'winrm') ? 'winrm' : 'ssh';
     const defaultPort = serverType === 'winrm' ? 5985 : 22;
@@ -1069,6 +1128,7 @@ function parseCsv(text) {
       credential_name: credential,
       cred_found: !credential || !!cred,
       description,
+      group,
     });
   }
   return rows;
@@ -1129,8 +1189,8 @@ async function runImport() {
   btn.disabled = true;
   btn.textContent = 'Importing…';
   try {
-    const payload = _importRows.map(({ name, host, port, type, credential_id, description }) =>
-      ({ name, host, port, type, credential_id: credential_id ?? null, description })
+    const payload = _importRows.map(({ name, host, port, type, credential_id, description, group }) =>
+      ({ name, host, port, type, credential_id: credential_id ?? null, description, group: group ?? '' })
     );
     const res = await api('POST', '/api/servers/import', payload);
     closeModal();
