@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import Column, Integer, String, Text, create_engine, text
+from sqlalchemy import Column, Integer, String, Text, create_engine, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -295,10 +295,14 @@ def list_groups():
 def rename_group(data: GroupRename):
     if not data.new_name.strip():
         raise HTTPException(400, "New name cannot be empty")
+    old, new = data.old_name, data.new_name.strip()
+    prefix = old + "/"
     with Session() as db:
-        db.query(ServerRow).filter(ServerRow.server_group == data.old_name).update(
-            {ServerRow.server_group: data.new_name.strip()}
+        db.query(ServerRow).filter(ServerRow.server_group == old).update(
+            {ServerRow.server_group: new}
         )
+        for row in db.query(ServerRow).filter(ServerRow.server_group.like(prefix + "%")).all():
+            row.server_group = new + "/" + row.server_group[len(prefix):]
         db.commit()
     return {"ok": True}
 
@@ -306,9 +310,10 @@ def rename_group(data: GroupRename):
 @app.delete("/api/groups/{name}", status_code=204)
 def delete_group(name: str):
     with Session() as db:
-        db.query(ServerRow).filter(ServerRow.server_group == name).update(
-            {ServerRow.server_group: ""}
-        )
+        db.query(ServerRow).filter(
+            or_(ServerRow.server_group == name,
+                ServerRow.server_group.like(name + "/%"))
+        ).update({ServerRow.server_group: ""}, synchronize_session="fetch")
         db.commit()
 
 

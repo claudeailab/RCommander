@@ -649,20 +649,29 @@ function renderServers() {
 
   servers = [...servers].sort((a, b) => a.name.localeCompare(b.name));
   const credMap = new Map(state.credentials.map(c => [c.id, c]));
-  const groups = {};
-  for (const s of servers) {
-    const g = s.server_group || '';
-    if (!groups[g]) groups[g] = [];
-    groups[g].push(s);
+
+  // Build group tree from path strings (e.g. "Prod/Web")
+  const nodes = {}; // fullPath → { servers: [], children: Set<fullPath> }
+  const roots = new Set();
+  for (const s of servers.filter(s => s.server_group)) {
+    const parts = s.server_group.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const path = parts.slice(0, i).join('/');
+      if (!nodes[path]) nodes[path] = { servers: [], children: new Set() };
+      if (i === 1) roots.add(path);
+      else nodes[parts.slice(0, i - 1).join('/')].children.add(path);
+    }
+    nodes[s.server_group].servers.push(s);
   }
 
-  const serverRow = s => {
+  const serverRow = (s, depth = 0) => {
     const cred = credMap.get(s.credential_id);
     const credCell = cred
       ? `<span class="badge badge-key" style="font-size:11px">${escape(cred.name)}</span>`
       : `<span style="color:var(--muted);font-size:12px">—</span>`;
+    const nameStyle = depth > 0 ? ` style="padding-left:${16 + depth * 16}px"` : '';
     return `<tr>
-      <td><strong>${escape(s.name)}</strong></td>
+      <td${nameStyle}><strong>${escape(s.name)}</strong></td>
       <td><code style="color:var(--blue)">${escape(s.host)}</code></td>
       <td>${escape(s.port)}</td>
       <td><span class="badge badge-${s.type}">${s.type.toUpperCase()}</span></td>
@@ -675,27 +684,42 @@ function renderServers() {
     </tr>`;
   };
 
-  let html = '';
-  if (groups['']) html += groups[''].map(serverRow).join('');
-  for (const [g, members] of Object.entries(groups).filter(([k]) => k).sort(([a],[b]) => a.localeCompare(b))) {
-    const collapsed = !_expandedGroups.has(g);
+  function countAll(path) {
+    return nodes[path].servers.length +
+      [...nodes[path].children].reduce((n, c) => n + countAll(c), 0);
+  }
+
+  function renderNode(path, depth) {
+    const node = nodes[path];
+    const label = path.split('/').pop();
+    const collapsed = !_expandedGroups.has(path);
     const icon = collapsed ? '▶' : '▼';
-    html += `<tr class="group-header" data-group="${escape(g)}" style="cursor:pointer;background:#111820;user-select:none">
-      <td colspan="7" style="padding:7px 16px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px">
+    const padLeft = 16 + depth * 16;
+    let html = `<tr class="group-header" data-group="${escape(path)}" style="cursor:pointer;background:#111820;user-select:none">
+      <td colspan="7" style="padding:7px 16px 7px ${padLeft}px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px">
         <span style="display:flex;align-items:center;justify-content:space-between">
           <span>
             <span style="margin-right:8px;font-size:10px">${icon}</span>
-            ${escape(g)} <span style="font-weight:400;margin-left:6px">(${members.length})</span>
+            ${escape(label)} <span style="font-weight:400;margin-left:6px">(${countAll(path)})</span>
           </span>
           <span style="display:flex;gap:6px">
-            <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(g)}">Rename</button>
-            <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(g)}">Delete</button>
+            <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
+            <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">Delete</button>
           </span>
         </span>
       </td>
     </tr>`;
-    if (!collapsed) html += members.map(serverRow).join('');
+    if (!collapsed) {
+      html += node.servers.map(s => serverRow(s, depth)).join('');
+      for (const childPath of [...node.children].sort()) {
+        html += renderNode(childPath, depth + 1);
+      }
+    }
+    return html;
   }
+
+  let html = servers.filter(s => !s.server_group).map(s => serverRow(s, 0)).join('');
+  for (const root of [...roots].sort()) html += renderNode(root, 0);
   tbody.innerHTML = html;
 
   tbody.querySelectorAll('.group-header').forEach(tr => {
@@ -856,7 +880,15 @@ function openModal(type, id = null) {
         <label>Group</label>
         <input id="f-group" value="${escape(s?.server_group ?? '')}" placeholder="e.g. Production, Lab, Windows" list="group-suggestions">
         <datalist id="group-suggestions">
-          ${[...new Set(state.servers.map(x => x.server_group).filter(Boolean))].map(g => `<option value="${escape(g)}">`).join('')}
+          ${(() => {
+            const paths = new Set();
+            for (const x of state.servers) {
+              if (!x.server_group) continue;
+              const parts = x.server_group.split('/');
+              for (let i = 1; i <= parts.length; i++) paths.add(parts.slice(0, i).join('/'));
+            }
+            return [...paths].sort().map(g => `<option value="${escape(g)}">`).join('');
+          })()}
         </datalist>
       </div>
       <div class="form-group">
@@ -1073,39 +1105,48 @@ function toast(msg, type = 'ok') {
 
 // ── Group management ──────────────────────────────────────────────────────────
 
-function openRenameGroupModal(name) {
+function openRenameGroupModal(fullPath) {
+  const parts = fullPath.split('/');
+  const label = parts.pop();
+  const parentPath = parts.join('/');
   modalBox.innerHTML = `
     ${modalHeader('Rename Group')}
+    ${parentPath ? `<div class="hint" style="margin-bottom:4px;color:var(--muted)">Inside: ${escape(parentPath)}</div>` : ''}
     <div class="form-group">
       <label>New Name</label>
-      <input id="f-group-name" value="${escape(name)}" placeholder="Group name">
+      <input id="f-group-name" value="${escape(label)}" placeholder="Group name">
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="f-rename-confirm">Rename</button>
     </div>`;
-  document.getElementById('f-rename-confirm').addEventListener('click', () => renameGroup(name));
+  document.getElementById('f-rename-confirm').addEventListener('click', () => renameGroup(fullPath, parentPath));
   overlay.classList.remove('hidden');
   setTimeout(() => document.getElementById('f-group-name')?.select(), 50);
 }
 
-async function renameGroup(oldName) {
-  const newName = document.getElementById('f-group-name')?.value?.trim();
-  if (!newName) { toast('Name cannot be empty', 'fail'); return; }
+async function renameGroup(oldPath, parentPath) {
+  const newLabel = document.getElementById('f-group-name')?.value?.trim();
+  if (!newLabel) { toast('Name cannot be empty', 'fail'); return; }
+  const newPath = parentPath ? parentPath + '/' + newLabel : newLabel;
   try {
-    await api('PUT', '/api/groups/rename', { old_name: oldName, new_name: newName });
+    await api('PUT', '/api/groups/rename', { old_name: oldPath, new_name: newPath });
     closeModal();
     await loadAll();
     toast('Group renamed');
   } catch(e) { toast(e.message, 'fail'); }
 }
 
-async function deleteGroup(name) {
-  if (!confirm(`Delete group "${name}"?\n\nServers in this group will be ungrouped, not deleted.`)) return;
+async function deleteGroup(path) {
+  const hasChildren = state.servers.some(s => s.server_group.startsWith(path + '/'));
+  const detail = hasChildren
+    ? 'All servers in this group and its subgroups will be ungrouped.'
+    : 'Servers in this group will be ungrouped, not deleted.';
+  if (!confirm(`Delete group "${path}"?\n\n${detail}`)) return;
   try {
-    await api('DELETE', `/api/groups/${encodeURIComponent(name)}`);
+    await api('DELETE', `/api/groups/${encodeURIComponent(path)}`);
     await loadAll();
-    toast(`Group "${name}" deleted`);
+    toast(`Group deleted`);
   } catch(e) { toast(e.message, 'fail'); }
 }
 
