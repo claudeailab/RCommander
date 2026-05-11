@@ -336,7 +336,7 @@ def rename_group(data: GroupRename):
     return {"ok": True}
 
 
-@app.delete("/api/groups/{name}", status_code=204)
+@app.delete("/api/groups/{name:path}", status_code=204)
 def delete_group(name: str):
     with Session() as db:
         db.query(ServerRow).filter(
