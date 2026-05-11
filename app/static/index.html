@@ -703,6 +703,8 @@ function renderServers() {
             ${escape(label)} <span style="font-weight:400;margin-left:6px">(${countAll(path)})</span>
           </span>
           <span style="display:flex;gap:6px">
+            <button class="icon-btn" style="font-size:11px" data-action="addsub" data-group="${escape(path)}">+ Subfolder</button>
+            <button class="icon-btn" style="font-size:11px" data-action="addserver" data-group="${escape(path)}">+ Server</button>
             <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
             <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">Delete</button>
           </span>
@@ -726,8 +728,11 @@ function renderServers() {
     tr.addEventListener('click', e => {
       const btn = e.target.closest('button[data-action]');
       if (btn) {
-        if (btn.dataset.action === 'rename') openRenameGroupModal(btn.dataset.group);
-        else deleteGroup(btn.dataset.group);
+        const g = btn.dataset.group;
+        if (btn.dataset.action === 'rename')    openRenameGroupModal(g);
+        else if (btn.dataset.action === 'delete')    deleteGroup(g);
+        else if (btn.dataset.action === 'addserver') openModal('server', null, g);
+        else if (btn.dataset.action === 'addsub')    openAddSubfolderModal(g);
         return;
       }
       toggleGroup(tr.dataset.group);
@@ -847,12 +852,13 @@ function showModal(selector = 'input,textarea') {
   if (selector) setTimeout(() => modalBox.querySelector(selector)?.focus(), 50);
 }
 
-function openModal(type, id = null) {
+function openModal(type, id = null, defaultGroup = '') {
   _editId = id;
 
   if (type === 'server') {
     _portTouched = false;
     const s = id ? state.servers.find(x => x.id === id) : null;
+    const groupValue = s?.server_group ?? defaultGroup;
     modalBox.innerHTML = `
       ${modalHeader(`${s ? 'Edit' : 'Add'} Server`)}
       <div class="form-group">
@@ -878,7 +884,7 @@ function openModal(type, id = null) {
       </div>
       <div class="form-group">
         <label>Group</label>
-        <input id="f-group" value="${escape(s?.server_group ?? '')}" placeholder="e.g. Production, Lab, Windows" list="group-suggestions">
+        <input id="f-group" value="${escape(groupValue)}" placeholder="e.g. Production, Lab, Windows" list="group-suggestions">
         <datalist id="group-suggestions">
           ${(() => {
             const paths = new Set();
@@ -1104,6 +1110,26 @@ function toast(msg, type = 'ok') {
 }
 
 // ── Group management ──────────────────────────────────────────────────────────
+
+function openAddSubfolderModal(parentPath) {
+  modalBox.innerHTML = `
+    ${modalHeader('New Subfolder')}
+    <div class="hint" style="margin-bottom:4px;color:var(--muted)">Inside: ${escape(parentPath)}</div>
+    <div class="form-group">
+      <label>Subfolder Name</label>
+      <input id="f-subfolder-name" placeholder="e.g. Web Servers">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="f-subfolder-confirm">Next: Add Server</button>
+    </div>`;
+  document.getElementById('f-subfolder-confirm').addEventListener('click', () => {
+    const name = document.getElementById('f-subfolder-name')?.value?.trim();
+    if (!name) { toast('Subfolder name cannot be empty', 'fail'); return; }
+    openModal('server', null, parentPath + '/' + name);
+  });
+  showModal('#f-subfolder-name');
+}
 
 function openRenameGroupModal(fullPath) {
   const parts = fullPath.split('/');
