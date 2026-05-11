@@ -15,6 +15,8 @@ A self-hosted web UI for running commands on remote servers over SSH (Linux) and
 
 ## Quick Start
 
+Add this to your `docker-compose.yml` file:
+
 ```yaml
   rcommander:
     image: claudeailab/rcommander
