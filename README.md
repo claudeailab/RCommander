@@ -1,8 +1,17 @@
 # RCommander
 
-R Commander (Rcmdr) running in a browser via noVNC — no desktop required.
+A self-hosted web UI for running commands on remote servers over SSH (Linux) and WinRM (Windows).
 
-![RCommander Web UI](screenshot.png)
+![RCommander](screenshot.png)
+
+## Features
+
+- **Servers** — manage a list of SSH and WinRM hosts
+- **Credentials** — store username/password or SSH private key pairs
+- **Commands** — save reusable commands
+- **Execute** — pick a server, credentials, and command; stream output live in the browser
+- Fully responsive — works on desktop and mobile
+- SQLite persistence via `/data` volume
 
 ## Quick Start
 
@@ -22,16 +31,16 @@ services:
       - ./config/rcommander:/data
 ```
 
-Open **http://your-host:8090/vnc.html** in your browser.
+Open **http://your-host:8090**
 
-## Features
+## WinRM Setup (Windows)
 
-- Full R Commander GUI accessible from any browser
-- Persistent `/data` volume for scripts and datasets
-- Multi-arch: `linux/amd64` and `linux/arm64`
+Enable WinRM on the target Windows host:
 
-## Environment Variables
+```powershell
+winrm quickconfig
+winrm set winrm/config/service/Auth '@{Basic="true"}'
+winrm set winrm/config/service '@{AllowUnencrypted="true"}'
+```
 
-| Variable | Description |
-|----------|-------------|
-| `TZ` | Timezone (e.g. `America/New_York`) |
+Default port: **5985** (HTTP) or **5986** (HTTPS).

@@ -1,0 +1,7 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+sqlalchemy==2.0.40
+paramiko==3.5.1
+pywinrm==0.5.0
+requests-credssp==2.0.0
+pydantic==2.11.4

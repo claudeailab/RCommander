@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RCommander</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #30363d;
+    --text:     #e6edf3;
+    --muted:    #8b949e;
+    --accent:   #238636;
+    --accent-h: #2ea043;
+    --danger:   #da3633;
+    --danger-h: #f85149;
+    --warn:     #e3b341;
+    --blue:     #388bfd;
+    --radius:   8px;
+    --sidebar:  220px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    min-height: 100vh;
+    font-size: 14px;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: var(--sidebar);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    z-index: 10;
+  }
+  .logo {
+    padding: 20px 16px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -.3px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .logo svg { color: var(--accent-h); }
+  nav { padding: 8px 0; flex: 1; }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    cursor: pointer;
+    border-radius: 0;
+    color: var(--muted);
+    transition: background .15s, color .15s;
+    border-left: 3px solid transparent;
+    user-select: none;
+  }
+  .nav-item:hover { background: #1f2937; color: var(--text); }
+  .nav-item.active { color: var(--text); background: #1f2937; border-left-color: var(--accent-h); }
+  .nav-item svg { flex-shrink: 0; }
+  .nav-label { font-size: 13px; font-weight: 500; }
+
+  /* ── Main ── */
+  main {
+    margin-left: var(--sidebar);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  .page-title { font-size: 16px; font-weight: 600; }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: var(--radius);
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: opacity .15s, background .15s;
+  }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-h); }
+  .btn-danger  { background: var(--danger); color: #fff; }
+  .btn-danger:hover:not(:disabled) { background: var(--danger-h); }
+  .btn-ghost   { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: #1f2937; color: var(--text); }
+  .btn-run     { background: var(--blue); color: #fff; font-size: 14px; padding: 9px 20px; }
+  .btn-run:hover:not(:disabled) { opacity: .85; }
+
+  .content { padding: 24px; flex: 1; }
+
+  /* ── Table ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: var(--muted);
+    background: #0d1117;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #1a2030; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-ssh  { background: #1c3a5e; color: #58a6ff; }
+  .badge-winrm{ background: #3a1c5e; color: #c084fc; }
+  .badge-key  { background: #1c3a2a; color: #56d364; }
+  .badge-pw   { background: #3a2a1c; color: #e3b341; }
+  .actions { display: flex; gap: 6px; }
+  .icon-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 12px;
+    transition: all .15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--muted); }
+  .icon-btn.del:hover { color: var(--danger-h); border-color: var(--danger-h); }
+  .empty-state {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--muted);
+  }
+  .empty-state p { margin-top: 8px; font-size: 13px; }
+
+  /* ── Execute tab ── */
+  .execute-layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+  .exec-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .exec-panel h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
+  .terminal {
+    background: #010409;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    min-height: 420px;
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .terminal-line { line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+  .terminal-line.stdout { color: #c9d1d9; }
+  .terminal-line.stderr { color: #f85149; }
+  .terminal-line.meta   { color: #58a6ff; font-style: italic; }
+  .terminal-line.success{ color: #56d364; }
+  .terminal-line.err    { color: #f85149; font-weight: bold; }
+  .terminal-placeholder { color: var(--muted); font-style: italic; margin: auto; text-align: center; }
+  .spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid #30363d;
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Modal ── */
+  .overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 16px;
+  }
+  .overlay.hidden { display: none; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    width: 100%;
+    max-width: 480px;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .modal-title { font-size: 16px; font-weight: 600; }
+  .modal-close {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .modal-close:hover { color: var(--text); background: #30363d; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  label { font-size: 12px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  input, select, textarea {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    width: 100%;
+    transition: border-color .15s;
+    outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--blue); }
+  textarea { font-family: 'SF Mono', monospace; resize: vertical; min-height: 80px; }
+  select option { background: var(--surface); }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .field-note {
+    font-size: 11px;
+    color: var(--warn);
+    margin-top: 2px;
+  }
+
+  /* ── Notifications ── */
+  .toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 200;
+  }
+  .toast {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    font-size: 13px;
+    min-width: 240px;
+    animation: slideIn .2s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .toast.ok   { border-left: 3px solid var(--accent-h); }
+  .toast.fail { border-left: 3px solid var(--danger-h); }
+  @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } }
+
+  /* ── Mobile ── */
+  .mobile-nav {
+    display: none;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    z-index: 10;
+    padding: 4px 0;
+  }
+  .mobile-nav-inner {
+    display: flex;
+    justify-content: space-around;
+  }
+  .mobile-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 8px 4px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 500;
+    transition: color .15s;
+    user-select: none;
+  }
+  .mobile-nav-item.active { color: var(--accent-h); }
+
+  @media (max-width: 768px) {
+    .sidebar { display: none; }
+    .mobile-nav { display: block; }
+    main { margin-left: 0; padding-bottom: 60px; }
+    .execute-layout { grid-template-columns: 1fr; }
+    .content { padding: 16px; }
+    .form-row { grid-template-columns: 1fr; }
+    td, th { padding: 10px 12px; }
+    .topbar { padding: 12px 16px; }
+    /* Hide description column on small screens */
+    .col-desc { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="logo">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M6 8l3 3-3 3"/><path d="M13 14h4"/></svg>
+    RCommander
+  </div>
+  <nav>
+    <div class="nav-item active" data-tab="servers">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor"/><circle cx="6" cy="18" r="1" fill="currentColor"/></svg>
+      <span class="nav-label">Servers</span>
+    </div>
+    <div class="nav-item" data-tab="credentials">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+      <span class="nav-label">Credentials</span>
+    </div>
+    <div class="nav-item" data-tab="commands">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      <span class="nav-label">Commands</span>
+    </div>
+    <div class="nav-item" data-tab="execute">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      <span class="nav-label">Execute</span>
+    </div>
+  </nav>
+</div>
+
+<!-- Mobile nav -->
+<div class="mobile-nav">
+  <div class="mobile-nav-inner">
+    <div class="mobile-nav-item active" data-tab="servers">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
+      Servers
+    </div>
+    <div class="mobile-nav-item" data-tab="credentials">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+      Credentials
+    </div>
+    <div class="mobile-nav-item" data-tab="commands">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      Commands
+    </div>
+    <div class="mobile-nav-item" data-tab="execute">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Execute
+    </div>
+  </div>
+</div>
+
+<!-- Main -->
+<main>
+  <!-- SERVERS -->
+  <div id="tab-servers">
+    <div class="topbar">
+      <span class="page-title">Servers</span>
+      <button class="btn btn-primary" onclick="openModal('server')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Server
+      </button>
+    </div>
+    <div class="content">
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Host</th>
+              <th>Port</th>
+              <th>Type</th>
+              <th class="col-desc">Description</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="servers-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- CREDENTIALS -->
+  <div id="tab-credentials" style="display:none">
+    <div class="topbar">
+      <span class="page-title">Credentials</span>
+      <button class="btn btn-primary" onclick="openModal('credential')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Credential
+      </button>
+    </div>
+    <div class="content">
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Username</th>
+              <th>Auth</th>
+              <th class="col-desc">Description</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="credentials-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMMANDS -->
+  <div id="tab-commands" style="display:none">
+    <div class="topbar">
+      <span class="page-title">Commands</span>
+      <button class="btn btn-primary" onclick="openModal('command')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Command
+      </button>
+    </div>
+    <div class="content">
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Command</th>
+              <th class="col-desc">Description</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="commands-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXECUTE -->
+  <div id="tab-execute" style="display:none">
+    <div class="topbar">
+      <span class="page-title">Execute</span>
+    </div>
+    <div class="content">
+      <div class="execute-layout">
+        <div class="exec-panel">
+          <div>
+            <h3>SERVER</h3>
+            <select id="exec-server">
+              <option value="">— select server —</option>
+            </select>
+          </div>
+          <div>
+            <h3>CREDENTIALS</h3>
+            <select id="exec-credential">
+              <option value="">— select credentials —</option>
+            </select>
+          </div>
+          <div>
+            <h3>COMMAND</h3>
+            <select id="exec-command">
+              <option value="">— select command —</option>
+            </select>
+          </div>
+          <button class="btn btn-run" id="run-btn" onclick="runCommand()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Run
+          </button>
+        </div>
+        <div>
+          <div class="terminal" id="terminal">
+            <div class="terminal-placeholder">Select a server, credentials, and command, then click Run.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- Modal overlay -->
+<div class="overlay hidden" id="overlay" onclick="closeModalOutside(event)">
+  <div class="modal" id="modal-box">
+    <!-- populated by JS -->
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toasts"></div>
+
+<script>
+const state = { servers: [], credentials: [], commands: [], activeTab: 'servers' };
+
+// ── API ───────────────────────────────────────────────────────────────────────
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok && res.status !== 204) {
+    const msg = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(msg.detail || res.statusText);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+async function loadAll() {
+  const [servers, credentials, commands] = await Promise.all([
+    api('GET', '/api/servers'),
+    api('GET', '/api/credentials'),
+    api('GET', '/api/commands'),
+  ]);
+  state.servers     = servers;
+  state.credentials = credentials;
+  state.commands    = commands;
+  renderServers();
+  renderCredentials();
+  renderCommands();
+  refreshExecuteDropdowns();
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+
+function escape(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderServers() {
+  const tbody = document.getElementById('servers-body');
+  if (!state.servers.length) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
+      <p>No servers yet. Add one to get started.</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = state.servers.map(s => `
+    <tr>
+      <td><strong>${escape(s.name)}</strong></td>
+      <td><code style="color:var(--blue)">${escape(s.host)}</code></td>
+      <td>${escape(s.port)}</td>
+      <td><span class="badge badge-${s.type}">${s.type.toUpperCase()}</span></td>
+      <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
+      <td>
+        <div class="actions">
+          <button class="icon-btn" onclick="openModal('server',${s.id})">Edit</button>
+          <button class="icon-btn del" onclick="del('server',${s.id})">Delete</button>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+function renderCredentials() {
+  const tbody = document.getElementById('credentials-body');
+  if (!state.credentials.length) {
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778"/></svg>
+      <p>No credentials yet.</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = state.credentials.map(c => {
+    const badge = c.has_private_key
+      ? '<span class="badge badge-key">SSH Key</span>'
+      : c.has_password
+        ? '<span class="badge badge-pw">Password</span>'
+        : '<span class="badge" style="background:#1f2937;color:var(--muted)">None</span>';
+    return `
+    <tr>
+      <td><strong>${escape(c.name)}</strong></td>
+      <td><code>${escape(c.username)}</code></td>
+      <td>${badge}</td>
+      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
+      <td>
+        <div class="actions">
+          <button class="icon-btn" onclick="openModal('credential',${c.id})">Edit</button>
+          <button class="icon-btn del" onclick="del('credential',${c.id})">Delete</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function renderCommands() {
+  const tbody = document.getElementById('commands-body');
+  if (!state.commands.length) {
+    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      <p>No commands yet.</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = state.commands.map(c => `
+    <tr>
+      <td><strong>${escape(c.name)}</strong></td>
+      <td><code style="color:var(--warn);font-size:12px">${escape(c.command)}</code></td>
+      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
+      <td>
+        <div class="actions">
+          <button class="icon-btn" onclick="openModal('command',${c.id})">Edit</button>
+          <button class="icon-btn del" onclick="del('command',${c.id})">Delete</button>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+function refreshExecuteDropdowns() {
+  const sel = (id, items, label) => {
+    const el = document.getElementById(id);
+    const cur = el.value;
+    el.innerHTML = `<option value="">— ${label} —</option>` +
+      items.map(i => `<option value="${i.id}" ${i.id==cur?'selected':''}>${escape(i.name)}</option>`).join('');
+  };
+  sel('exec-server',     state.servers,     'select server');
+  sel('exec-credential', state.credentials, 'select credentials');
+  sel('exec-command',    state.commands,    'select command');
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+
+function switchTab(tab) {
+  state.activeTab = tab;
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.style.display = 'none');
+  document.getElementById(`tab-${tab}`).style.display = '';
+  document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.tab === tab);
+  });
+}
+
+document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(el => {
+  el.addEventListener('click', () => switchTab(el.dataset.tab));
+});
+
+// ── Modal ─────────────────────────────────────────────────────────────────────
+
+let _editId = null;
+let _editType = null;
+
+function openModal(type, id = null) {
+  _editType = type;
+  _editId   = id;
+  const overlay = document.getElementById('overlay');
+  const box     = document.getElementById('modal-box');
+
+  if (type === 'server') {
+    const s = id ? state.servers.find(x => x.id === id) : null;
+    box.innerHTML = `
+      <div class="modal-header">
+        <span class="modal-title">${s ? 'Edit' : 'Add'} Server</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="form-group">
+        <label>Name</label>
+        <input id="f-name" value="${escape(s?.name ?? '')}" placeholder="My Linux Server">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Host / IP</label>
+          <input id="f-host" value="${escape(s?.host ?? '')}" placeholder="192.168.1.10">
+        </div>
+        <div class="form-group">
+          <label>Port</label>
+          <input id="f-port" type="number" value="${s?.port ?? 22}" placeholder="22">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select id="f-type" onchange="onTypeChange()">
+          <option value="ssh"   ${(!s||s.type==='ssh')  ?'selected':''}>SSH (Linux/Mac)</option>
+          <option value="winrm" ${s?.type==='winrm'     ?'selected':''}>WinRM (Windows)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input id="f-desc" value="${escape(s?.description ?? '')}" placeholder="Optional">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveServer()">Save</button>
+      </div>`;
+  }
+
+  if (type === 'credential') {
+    const c = id ? state.credentials.find(x => x.id === id) : null;
+    box.innerHTML = `
+      <div class="modal-header">
+        <span class="modal-title">${c ? 'Edit' : 'Add'} Credential</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="form-group">
+        <label>Name</label>
+        <input id="f-name" value="${escape(c?.name ?? '')}" placeholder="prod-key">
+      </div>
+      <div class="form-group">
+        <label>Username</label>
+        <input id="f-username" value="${escape(c?.username ?? '')}" placeholder="root">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input id="f-password" type="password" value="" placeholder="${c?.has_password ? '(unchanged)' : 'Optional'}">
+        ${c?.has_password ? '<div class="hint field-note">Leave blank to keep existing password</div>' : ''}
+      </div>
+      <div class="form-group">
+        <label>Private Key (PEM)</label>
+        <textarea id="f-key" rows="4" placeholder="${c?.has_private_key ? '(unchanged)' : '-----BEGIN ... PRIVATE KEY-----\n...'}">${''}</textarea>
+        ${c?.has_private_key ? '<div class="hint field-note">Leave blank to keep existing key</div>' : ''}
+        <div class="hint">SSH key takes priority over password for SSH connections</div>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input id="f-desc" value="${escape(c?.description ?? '')}" placeholder="Optional">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveCredential()">Save</button>
+      </div>`;
+  }
+
+  if (type === 'command') {
+    const c = id ? state.commands.find(x => x.id === id) : null;
+    box.innerHTML = `
+      <div class="modal-header">
+        <span class="modal-title">${c ? 'Edit' : 'Add'} Command</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="form-group">
+        <label>Name</label>
+        <input id="f-name" value="${escape(c?.name ?? '')}" placeholder="disk usage">
+      </div>
+      <div class="form-group">
+        <label>Command</label>
+        <textarea id="f-command" rows="3" placeholder="df -h">${escape(c?.command ?? '')}</textarea>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input id="f-desc" value="${escape(c?.description ?? '')}" placeholder="Optional">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveCommand()">Save</button>
+      </div>`;
+  }
+
+  overlay.classList.remove('hidden');
+  setTimeout(() => box.querySelector('input,textarea')?.focus(), 50);
+}
+
+function onTypeChange() {
+  const type = document.getElementById('f-type').value;
+  const portEl = document.getElementById('f-port');
+  if (!portEl._touched) {
+    portEl.value = type === 'winrm' ? 5985 : 22;
+  }
+}
+
+function closeModal() {
+  document.getElementById('overlay').classList.add('hidden');
+}
+
+function closeModalOutside(e) {
+  if (e.target === document.getElementById('overlay')) closeModal();
+}
+
+function val(id) { return document.getElementById(id)?.value?.trim() ?? ''; }
+
+async function saveServer() {
+  const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22, type: val('f-type'), description: val('f-desc') };
+  if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
+  try {
+    if (_editId) await api('PUT', `/api/servers/${_editId}`, body);
+    else         await api('POST', '/api/servers', body);
+    closeModal();
+    await loadAll();
+    toast(`Server ${_editId ? 'updated' : 'added'}`);
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
+async function saveCredential() {
+  const body = { name: val('f-name'), username: val('f-username'), password: val('f-password'), private_key: document.getElementById('f-key')?.value ?? '', description: val('f-desc') };
+  if (!body.name || !body.username) { toast('Name and Username are required', 'fail'); return; }
+  try {
+    if (_editId) await api('PUT', `/api/credentials/${_editId}`, body);
+    else         await api('POST', '/api/credentials', body);
+    closeModal();
+    await loadAll();
+    toast(`Credential ${_editId ? 'updated' : 'added'}`);
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
+async function saveCommand() {
+  const body = { name: val('f-name'), command: document.getElementById('f-command')?.value?.trim() ?? '', description: val('f-desc') };
+  if (!body.name || !body.command) { toast('Name and Command are required', 'fail'); return; }
+  try {
+    if (_editId) await api('PUT', `/api/commands/${_editId}`, body);
+    else         await api('POST', '/api/commands', body);
+    closeModal();
+    await loadAll();
+    toast(`Command ${_editId ? 'updated' : 'added'}`);
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
+async function del(type, id) {
+  const map = { server: ['servers', 'Server'], credential: ['credentials', 'Credential'], command: ['commands', 'Command'] };
+  const [resource, label] = map[type];
+  if (!confirm(`Delete this ${label}?`)) return;
+  try {
+    await api('DELETE', `/api/${resource}/${id}`);
+    await loadAll();
+    toast(`${label} deleted`);
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
+// ── Execute ───────────────────────────────────────────────────────────────────
+
+let _running = false;
+
+async function runCommand() {
+  if (_running) return;
+  const serverId = document.getElementById('exec-server').value;
+  const credId   = document.getElementById('exec-credential').value;
+  const cmdId    = document.getElementById('exec-command').value;
+  if (!serverId || !credId || !cmdId) { toast('Select server, credentials, and command', 'fail'); return; }
+
+  const server = state.servers.find(s => s.id == serverId);
+  const cmd    = state.commands.find(c => c.id == cmdId);
+
+  const term = document.getElementById('terminal');
+  term.innerHTML = `<div class="terminal-line meta">▶ Running "${escape(cmd?.name)}" on ${escape(server?.host)}…</div>`;
+
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> Running…`;
+  _running = true;
+
+  try {
+    const res = await fetch('/api/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ server_id: +serverId, credential_id: +credId, command_id: +cmdId }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      appendTerm('error', `Error: ${err.detail}`);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.replace(/^data: /, '').trim();
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === 'stdout') appendTerm('stdout', ev.text);
+          else if (ev.type === 'stderr') appendTerm('stderr', ev.text);
+          else if (ev.type === 'error') appendTerm('error', `Error: ${ev.text}`);
+          else if (ev.type === 'exit') {
+            appendTerm(ev.code === 0 ? 'success' : 'stderr',
+              `\n[Process exited with code ${ev.code}]`);
+          }
+        } catch {}
+      }
+    }
+  } catch(e) {
+    appendTerm('error', `Connection error: ${e.message}`);
+  } finally {
+    _running = false;
+    btn.disabled = false;
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run`;
+  }
+}
+
+function appendTerm(cls, text) {
+  const term = document.getElementById('terminal');
+  const div = document.createElement('div');
+  div.className = `terminal-line ${cls}`;
+  div.textContent = text;
+  term.appendChild(div);
+  term.scrollTop = term.scrollHeight;
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+
+function toast(msg, type = 'ok') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `${type === 'ok' ? '✓' : '✗'} ${msg}`;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── Port helper ───────────────────────────────────────────────────────────────
+
+document.addEventListener('change', e => {
+  if (e.target.id === 'f-port') e.target._touched = true;
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+loadAll().catch(e => toast('Failed to load data: ' + e.message, 'fail'));
+</script>
+</body>
+</html>
