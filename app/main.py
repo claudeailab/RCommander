@@ -29,6 +29,7 @@ class ServerRow(Base):
     port = Column(Integer, nullable=False, default=22)
     type = Column(String, nullable=False, default="ssh")
     description = Column(Text, default="")
+    credential_id = Column(Integer, nullable=True)
 
 
 class CredentialRow(Base):
@@ -55,9 +56,10 @@ Base.metadata.create_all(engine)
 def _migrate():
     """Add columns introduced after initial release without dropping existing data."""
     migrations = [
-        ("servers",     "description", "TEXT NOT NULL DEFAULT ''"),
-        ("credentials", "description", "TEXT NOT NULL DEFAULT ''"),
-        ("commands",    "description", "TEXT NOT NULL DEFAULT ''"),
+        ("servers",     "description",   "TEXT NOT NULL DEFAULT ''"),
+        ("credentials", "description",   "TEXT NOT NULL DEFAULT ''"),
+        ("commands",    "description",   "TEXT NOT NULL DEFAULT ''"),
+        ("servers",     "credential_id", "INTEGER"),
     ]
     with engine.connect() as conn:
         for table, column, col_def in migrations:
@@ -84,6 +86,7 @@ class ServerIn(BaseModel):
     port: int = 22
     type: str = "ssh"
     description: str = ""
+    credential_id: Optional[int] = None
 
 
 class CredentialIn(BaseModel):

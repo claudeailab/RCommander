@@ -435,6 +435,7 @@
               <th>Host</th>
               <th>Port</th>
               <th>Type</th>
+              <th>Credential</th>
               <th class="col-desc">Description</th>
               <th></th>
             </tr>
@@ -592,17 +593,23 @@ function escape(s) {
 function renderServers() {
   const tbody = document.getElementById('servers-body');
   if (!state.servers.length) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
       <p>No servers yet. Add one to get started.</p></div></td></tr>`;
     return;
   }
-  tbody.innerHTML = state.servers.map(s => `
+  tbody.innerHTML = state.servers.map(s => {
+    const cred = state.credentials.find(c => c.id === s.credential_id);
+    const credCell = cred
+      ? `<span class="badge badge-key" style="font-size:11px">${escape(cred.name)}</span>`
+      : `<span style="color:var(--muted);font-size:12px">—</span>`;
+    return `
     <tr>
       <td><strong>${escape(s.name)}</strong></td>
       <td><code style="color:var(--blue)">${escape(s.host)}</code></td>
       <td>${escape(s.port)}</td>
       <td><span class="badge badge-${s.type}">${s.type.toUpperCase()}</span></td>
+      <td>${credCell}</td>
       <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
       <td>
         <div class="actions">
@@ -610,7 +617,8 @@ function renderServers() {
           <button class="icon-btn del" onclick="del('server',${s.id})">Delete</button>
         </div>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 function renderCredentials() {
@@ -692,6 +700,15 @@ document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(el => {
   el.addEventListener('click', () => switchTab(el.dataset.tab));
 });
 
+document.addEventListener('change', e => {
+  if (e.target.id === 'exec-server') {
+    const server = state.servers.find(s => s.id == e.target.value);
+    if (server?.credential_id) {
+      document.getElementById('exec-credential').value = server.credential_id;
+    }
+  }
+});
+
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
 let _editId = null;
@@ -730,6 +747,14 @@ function openModal(type, id = null) {
           <option value="ssh"   ${(!s||s.type==='ssh')  ?'selected':''}>SSH (Linux/Mac)</option>
           <option value="winrm" ${s?.type==='winrm'     ?'selected':''}>WinRM (Windows)</option>
         </select>
+      </div>
+      <div class="form-group">
+        <label>Default Credential</label>
+        <select id="f-credential">
+          <option value="">— none —</option>
+          ${state.credentials.map(c => `<option value="${c.id}" ${s?.credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
+        </select>
+        <div class="hint">Auto-selected on the Execute tab</div>
       </div>
       <div class="form-group">
         <label>Description</label>
@@ -825,7 +850,8 @@ function closeModalOutside(e) {
 function val(id) { return document.getElementById(id)?.value?.trim() ?? ''; }
 
 async function saveServer() {
-  const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22, type: val('f-type'), description: val('f-desc') };
+  const credVal = document.getElementById('f-credential')?.value;
+  const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22, type: val('f-type'), description: val('f-desc'), credential_id: credVal ? parseInt(credVal) : null };
   if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
   try {
     if (_editId) await api('PUT', `/api/servers/${_editId}`, body);
