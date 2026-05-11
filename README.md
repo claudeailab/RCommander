@@ -17,7 +17,7 @@ A self-hosted web UI for running commands on remote servers over SSH (Linux) and
 
 ```yaml
   rcommander:
-    image: aristosv/rcommander
+    image: claudeailab/rcommander
     container_name: rcommander
     hostname: rcommander
     restart: unless-stopped

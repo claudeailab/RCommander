@@ -1,5 +1,5 @@
   rcommander:
-    image: aristosv/rcommander
+    image: claudeailab/rcommander
     container_name: rcommander
     hostname: rcommander
     restart: unless-stopped
