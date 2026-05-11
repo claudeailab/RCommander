@@ -1,0 +1,13 @@
+services:
+  rcommander:
+    image: aristosv/rcommander
+    container_name: rcommander
+    hostname: rcommander
+    restart: unless-stopped
+    user: "0"
+    environment:
+      TZ: ${TZ}
+    ports:
+      - 8090:8090
+    volumes:
+      - ./config/rcommander:/data
