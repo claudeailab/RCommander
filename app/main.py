@@ -51,6 +51,28 @@ class CommandRow(Base):
 
 Base.metadata.create_all(engine)
 
+
+def _migrate():
+    """Add columns introduced after initial release without dropping existing data."""
+    migrations = [
+        ("servers",     "description", "TEXT NOT NULL DEFAULT ''"),
+        ("credentials", "description", "TEXT NOT NULL DEFAULT ''"),
+        ("commands",    "description", "TEXT NOT NULL DEFAULT ''"),
+    ]
+    with engine.connect() as conn:
+        for table, column, col_def in migrations:
+            existing = [row[1] for row in conn.execute(
+                __import__("sqlalchemy").text(f"PRAGMA table_info({table})")
+            )]
+            if column not in existing:
+                conn.execute(__import__("sqlalchemy").text(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"
+                ))
+        conn.commit()
+
+
+_migrate()
+
 app = FastAPI(title="RCommander")
 
 
