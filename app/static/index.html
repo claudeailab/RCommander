@@ -715,6 +715,18 @@ function renderServers() {
   // Build group tree from path strings (e.g. "Prod/Web")
   const nodes = {}; // fullPath → { servers: [], children: Set<fullPath> }
   const roots = new Set();
+
+  // Seed all known groups (including empty ones) so they appear in the tree
+  for (const groupPath of state.groups) {
+    const parts = groupPath.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const path = parts.slice(0, i).join('/');
+      if (!nodes[path]) nodes[path] = { servers: [], children: new Set() };
+      if (i === 1) roots.add(path);
+      else nodes[parts.slice(0, i - 1).join('/')].children.add(path);
+    }
+  }
+
   for (const s of servers.filter(s => s.server_group)) {
     const parts = s.server_group.split('/');
     for (let i = 1; i <= parts.length; i++) {
