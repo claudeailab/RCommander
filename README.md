@@ -6,10 +6,12 @@ A self-hosted web UI for running commands on remote servers over SSH (Linux) and
 
 ## Features
 
-- **Servers** — manage a list of SSH and WinRM hosts
-- **Credentials** — store username/password or SSH private key pairs
-- **Commands** — save reusable commands
-- **Execute** — pick a server, credentials, and command; stream output live in the browser
+- **Servers** — manage SSH and WinRM hosts, organised into nested folders
+- **Folder tree** — create folders and subfolders to group servers; inline rename, delete, and add subfolder actions on every folder
+- **Credentials** — store username/password or SSH private key pairs; credentials are linked directly to servers
+- **Commands** — save reusable commands with descriptions
+- **Execute** — drill down through the folder hierarchy to pick a server, choose a command, and stream live output in a built-in terminal
+- **CSV import** — bulk-import servers from a CSV file
 - Fully responsive — works on desktop and mobile
 - SQLite persistence via `/data` volume
 
