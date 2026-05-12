@@ -701,14 +701,6 @@ function renderServers() {
     );
   }
 
-  if (!servers.length) {
-    tbody.innerHTML = emptyRow(7,
-      '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>',
-      q ? 'No matching servers.' : 'No servers yet. Add one to get started.'
-    );
-    return;
-  }
-
   servers = [...servers].sort((a, b) => a.name.localeCompare(b.name));
   const credMap = new Map(state.credentials.map(c => [c.id, c]));
 
@@ -795,6 +787,13 @@ function renderServers() {
 
   let html = servers.filter(s => !s.server_group).map(s => serverRow(s, 0)).join('');
   for (const root of [...roots].sort()) html += renderNode(root, 0);
+  if (!html) {
+    tbody.innerHTML = emptyRow(7,
+      '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>',
+      q ? 'No matching servers.' : 'No servers yet. Add one to get started.'
+    );
+    return;
+  }
   tbody.innerHTML = html;
 
   tbody.querySelectorAll('.group-header').forEach(tr => {
