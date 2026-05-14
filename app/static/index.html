@@ -395,7 +395,7 @@
   @media (max-width: 768px) {
     .sidebar { display: none; }
     .mobile-nav { display: block; }
-    main { margin-left: 0; padding-bottom: 60px; }
+    main { margin-left: 0; padding-bottom: 60px; max-width: 100vw; overflow-x: hidden; }
     .execute-layout { grid-template-columns: 1fr; }
     .content { padding: 16px; }
     .form-row { grid-template-columns: 1fr; }
@@ -405,6 +405,8 @@
     .col-desc { display: none; }
     /* Hide button labels on small screens, show only icons */
     .btn-label { display: none; }
+    /* Contain table overflow inside the card, not the whole page */
+    .card { overflow-x: auto; }
   }
   /* ── Dropdown menu ── */
   .dropdown { position: relative; }
