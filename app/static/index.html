@@ -469,7 +469,12 @@
         </button>
         <button class="btn btn-ghost" onclick="openImportModal()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          Import CSV
+          Import
+        </button>
+        <button class="btn btn-ghost" onclick="exportServers()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export
+        </button>
         </button>
         <button class="btn btn-primary" onclick="openModal('server')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -1387,12 +1392,39 @@ async function deleteGroup(path) {
 
 // ── CSV Import ────────────────────────────────────────────────────────────────
 
+// ── Export ────────────────────────────────────────────────────────────────────
+
+function exportServers() {
+  const credMap = new Map(state.credentials.map(c => [c.id, c]));
+  const csvField = v => (String(v ?? '').includes(',') || String(v ?? '').includes('"'))
+    ? `"${String(v).replace(/"/g, '""')}"` : String(v ?? '');
+  const header = 'name,host,port,type,credential,description,group';
+  const rows = [...state.servers]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(s => [
+      s.name, s.host, s.port, s.type,
+      credMap.get(s.credential_id)?.name ?? '',
+      s.description ?? '',
+      s.server_group ?? '',
+    ].map(csvField).join(','));
+  const csv = [header, ...rows].join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'rcommander-servers.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Import ────────────────────────────────────────────────────────────────────
+
 let _importRows = [];
 
 function openImportModal() {
   _importRows = [];
   modalBox.innerHTML = `
-    ${modalHeader('Import Servers from CSV')}
+    ${modalHeader('Import Servers')}
     <div class="import-hint">
       Columns: <code>name</code>, <code>host</code>, <code>port</code>, <code>type</code>, <code>credential</code>, <code>description</code>, <code>group</code><br>
       Only <code>name</code> and <code>host</code> are required. <code>type</code> defaults to <code>ssh</code>.
