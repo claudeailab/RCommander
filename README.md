@@ -42,6 +42,12 @@ docker compose up -d
 
 Open **http://your-host:8090**
 
+## Updating
+
+```bash
+docker compose pull rcommander && docker compose up -d rcommander
+```
+
 ## WinRM Setup (Windows)
 
 Run the following in **PowerShell as Administrator** on the target Windows host:
