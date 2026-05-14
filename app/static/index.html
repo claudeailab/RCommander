@@ -686,6 +686,39 @@ function folderTreeHTML(selectedPath = '') {
   return [...roots].sort().map(r => _folderNodeHTML(nodes, r, selectedPath, 0)).join('');
 }
 
+// Collapsible folder picker used in the server form
+const _pickerExpanded = new Set();
+
+function folderPickerHTML(selectedPath = '') {
+  const { nodes, roots } = buildFolderNodes();
+  // Auto-expand ancestors of the selected path so it's visible
+  if (selectedPath) {
+    const parts = selectedPath.split('/');
+    for (let i = 1; i < parts.length; i++) _pickerExpanded.add(parts.slice(0, i).join('/'));
+  }
+  return [...roots].sort().map(r => _pickerNodeHTML(nodes, r, selectedPath, 0)).join('');
+}
+
+function _pickerNodeHTML(nodes, path, selectedPath, indent) {
+  const label = path.split('/').pop();
+  const selected = path === selectedPath;
+  const children = [...(nodes[path] || new Set())].sort();
+  const hasChildren = children.length > 0;
+  const expanded = _pickerExpanded.has(path);
+  const padLeft = 12 + indent * 16;
+  const arrow = hasChildren
+    ? `<span class="picker-arrow" data-toggle="${escape(path)}" style="margin-right:4px;font-size:10px;opacity:.6">${expanded ? '▼' : '▶'}</span>`
+    : `<span style="display:inline-block;width:16px"></span>`;
+  let html = `<div class="folder-node${selected ? ' f-selected' : ''}" data-path="${escape(path)}" style="padding-left:${padLeft}px">
+    ${arrow}<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    ${escape(label)}
+  </div>`;
+  if (expanded) {
+    for (const child of children) html += _pickerNodeHTML(nodes, child, selectedPath, indent + 1);
+  }
+  return html;
+}
+
 const _expandedGroups = new Set();
 
 function renderServers() {
@@ -745,6 +778,7 @@ function renderServers() {
       <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
       <td><div class="actions">
         <button class="icon-btn" onclick="openModal('server',${s.id})">Edit</button>
+        <button class="icon-btn" onclick="cloneServer(${s.id})">Clone</button>
         <button class="icon-btn del" onclick="del('server',${s.id})">Delete</button>
       </div></td>
     </tr>`;
@@ -986,41 +1020,54 @@ function showModal(selector = 'input,textarea') {
   if (selector) setTimeout(() => modalBox.querySelector(selector)?.focus(), 50);
 }
 
+function cloneServer(id) {
+  const s = state.servers.find(x => x.id === id);
+  if (!s) return;
+  _cloneSource = s;
+  openModal('server', null, s.server_group);
+}
+
+let _cloneSource = null;
+
 function openModal(type, id = null, defaultGroup = '') {
+  if (type !== 'server') _cloneSource = null;
+  _pickerExpanded.clear();
   _editId = id;
 
   if (type === 'server') {
     _portTouched = false;
     const s = id ? state.servers.find(x => x.id === id) : null;
-    const groupValue = s?.server_group ?? defaultGroup;
+    const src = s ?? _cloneSource;
+    const groupValue = src?.server_group ?? defaultGroup;
+    const title = s ? 'Edit Server' : (_cloneSource ? `Clone "${_cloneSource.name}"` : 'Add Server');
     modalBox.innerHTML = `
-      ${modalHeader(`${s ? 'Edit' : 'Add'} Server`)}
+      ${modalHeader(title)}
       <div class="form-group">
         <label>Name</label>
-        <input id="f-name" value="${escape(s?.name ?? '')}" placeholder="My Linux Server">
+        <input id="f-name" value="${escape(_cloneSource && !s ? '' : (s?.name ?? ''))}" placeholder="My Linux Server">
       </div>
       <div class="form-row">
         <div class="form-group">
           <label>Host / IP</label>
-          <input id="f-host" value="${escape(s?.host ?? '')}" placeholder="192.168.1.10">
+          <input id="f-host" value="${escape(src?.host ?? '')}" placeholder="192.168.1.10">
         </div>
         <div class="form-group">
           <label>Port</label>
-          <input id="f-port" type="number" value="${s?.port ?? 22}" placeholder="22">
+          <input id="f-port" type="number" value="${src?.port ?? 22}" placeholder="22">
         </div>
       </div>
       <div class="form-group">
         <label>Type</label>
         <select id="f-type" onchange="onTypeChange()">
-          <option value="ssh"   ${(!s||s.type==='ssh')  ?'selected':''}>SSH (Linux/Mac)</option>
-          <option value="winrm" ${s?.type==='winrm'     ?'selected':''}>WinRM (Windows)</option>
+          <option value="ssh"   ${(!src||src.type==='ssh')  ?'selected':''}>SSH (Linux/Mac)</option>
+          <option value="winrm" ${src?.type==='winrm'       ?'selected':''}>WinRM (Windows)</option>
         </select>
       </div>
       <div class="form-group">
         <label>Folder</label>
-        <div class="folder-tree" id="f-group-tree" style="max-height:180px">
+        <div class="folder-tree" id="f-group-tree" style="max-height:220px">
           <div class="folder-node f-none${!groupValue ? ' f-selected' : ''}" data-path="" style="padding-left:12px">(no folder)</div>
-          ${folderTreeHTML(groupValue)}
+          ${folderPickerHTML(groupValue)}
         </div>
         <input type="hidden" id="f-group" value="${escape(groupValue)}">
         <div class="hint" id="f-group-hint">${groupValue ? 'Folder: ' + escape(groupValue) : 'No folder selected'}</div>
@@ -1029,13 +1076,13 @@ function openModal(type, id = null, defaultGroup = '') {
         <label>Default Credential</label>
         <select id="f-credential">
           <option value="">— none —</option>
-          ${state.credentials.map(c => `<option value="${c.id}" ${s?.credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
+          ${state.credentials.map(c => `<option value="${c.id}" ${src?.credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
         </select>
         <div class="hint">Auto-selected on the Execute tab</div>
       </div>
       <div class="form-group">
         <label>Description</label>
-        <input id="f-desc" value="${escape(s?.description ?? '')}" placeholder="Optional">
+        <input id="f-desc" value="${escape(src?.description ?? '')}" placeholder="Optional">
       </div>
       ${modalFooter('saveServer')}`;
   }
@@ -1095,14 +1142,28 @@ function openModal(type, id = null, defaultGroup = '') {
     const tree = modalBox.querySelector('#f-group-tree');
     const hidden = modalBox.querySelector('#f-group');
     const hint = modalBox.querySelector('#f-group-hint');
-    tree?.querySelectorAll('.folder-node').forEach(el => {
-      el.addEventListener('click', () => {
-        tree.querySelectorAll('.folder-node').forEach(n => n.classList.remove('f-selected'));
-        el.classList.add('f-selected');
-        hidden.value = el.dataset.path;
-        hint.textContent = el.dataset.path ? 'Folder: ' + el.dataset.path : 'No folder selected';
+    function bindPickerClicks() {
+      tree?.querySelectorAll('.folder-node').forEach(el => {
+        el.addEventListener('click', e => {
+          const toggle = e.target.closest('.picker-arrow');
+          if (toggle) {
+            const p = toggle.dataset.toggle;
+            if (_pickerExpanded.has(p)) _pickerExpanded.delete(p);
+            else _pickerExpanded.add(p);
+            tree.querySelector('.f-none')?.classList.toggle('f-selected', hidden.value === '');
+            const inner = tree.querySelector('.f-none')?.outerHTML ?? '';
+            tree.innerHTML = inner + folderPickerHTML(hidden.value);
+            bindPickerClicks();
+            return;
+          }
+          tree.querySelectorAll('.folder-node').forEach(n => n.classList.remove('f-selected'));
+          el.classList.add('f-selected');
+          hidden.value = el.dataset.path;
+          hint.textContent = el.dataset.path ? 'Folder: ' + el.dataset.path : 'No folder selected';
+        });
       });
-    });
+    }
+    bindPickerClicks();
   }
 }
 
@@ -1263,7 +1324,9 @@ function openNewFolderModal(parentPath) {
       <input id="f-new-folder-name" placeholder="Folder name">
     </div>
     ${modalFooter('_saveNewFolder')}`;
-  modalBox.querySelector('#f-new-folder-name').dataset.parent = parentPath;
+  const inp = modalBox.querySelector('#f-new-folder-name');
+  inp.dataset.parent = parentPath;
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') _saveNewFolder(); });
   showModal('#f-new-folder-name');
 }
 
