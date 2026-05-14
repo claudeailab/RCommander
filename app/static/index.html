@@ -403,7 +403,40 @@
     .topbar { padding: 12px 16px; }
     /* Hide description column on small screens */
     .col-desc { display: none; }
+    /* Hide button labels on small screens, show only icons */
+    .btn-label { display: none; }
   }
+  /* ── Dropdown menu ── */
+  .dropdown { position: relative; }
+  .dropdown-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    min-width: 160px;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    overflow: hidden;
+  }
+  .dropdown-menu.open { display: block; }
+  .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    background: none;
+    border: none;
+    width: 100%;
+    text-align: left;
+  }
+  .dropdown-item:hover { background: #1f2937; }
 </style>
 </head>
 <body>
@@ -462,23 +495,30 @@
   <div id="tab-servers">
     <div class="topbar">
       <span class="page-title">Servers</span>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-ghost" onclick="openNewFolderModal('')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-          New Folder
-        </button>
-        <button class="btn btn-ghost" onclick="openImportModal()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          Import
-        </button>
-        <button class="btn btn-ghost" onclick="exportServers()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Export
-        </button>
-        </button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="dropdown" id="servers-menu">
+          <button class="btn btn-ghost" onclick="toggleDropdown('servers-menu')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/></svg>
+            <span class="btn-label">More</span>
+          </button>
+          <div class="dropdown-menu">
+            <button class="dropdown-item" onclick="closeDropdowns();openNewFolderModal('')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+              New Folder
+            </button>
+            <button class="dropdown-item" onclick="closeDropdowns();openImportModal()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Import CSV
+            </button>
+            <button class="dropdown-item" onclick="closeDropdowns();exportServers()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Export CSV
+            </button>
+          </div>
+        </div>
         <button class="btn btn-primary" onclick="openModal('server')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Add Server
+          <span class="btn-label">Add Server</span>
         </button>
       </div>
     </div>
@@ -514,7 +554,7 @@
       <span class="page-title">Credentials</span>
       <button class="btn btn-primary" onclick="openModal('credential')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Add Credential
+        <span class="btn-label">Add Credential</span>
       </button>
     </div>
     <div class="content">
@@ -541,7 +581,7 @@
       <span class="page-title">Commands</span>
       <button class="btn btn-primary" onclick="openModal('command')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Add Command
+        <span class="btn-label">Add Command</span>
       </button>
     </div>
     <div class="content">
@@ -991,6 +1031,23 @@ function refreshExecuteDropdowns() {
   _renderExecFolderPath();
   sel('exec-command', state.commands, 'select command');
 }
+
+// ── Dropdown menus ────────────────────────────────────────────────────────────
+
+function toggleDropdown(id) {
+  const menu = document.querySelector(`#${id} .dropdown-menu`);
+  const isOpen = menu.classList.contains('open');
+  closeDropdowns();
+  if (!isOpen) menu.classList.add('open');
+}
+
+function closeDropdowns() {
+  document.querySelectorAll('.dropdown-menu.open').forEach(m => m.classList.remove('open'));
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.dropdown')) closeDropdowns();
+});
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
