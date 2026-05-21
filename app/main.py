@@ -255,7 +255,11 @@ def update_server(server_id: int, data: ServerIn):
             raise HTTPException(404, "Not found")
         for k, v in data.model_dump().items():
             setattr(row, k, v)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, "Name already exists")
         db.refresh(row)
         return row_to_dict(row)
 
@@ -374,7 +378,11 @@ def update_credential(cred_id: int, data: CredentialIn):
             if k in ("password", "private_key") and v == "":
                 continue
             setattr(row, k, v)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, "Name already exists")
         db.refresh(row)
         return row_to_dict(row)
 
@@ -407,7 +415,11 @@ def update_command(cmd_id: int, data: CommandIn):
             raise HTTPException(404, "Not found")
         for k, v in data.model_dump().items():
             setattr(row, k, v)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, "Name already exists")
         db.refresh(row)
         return row_to_dict(row)
 
