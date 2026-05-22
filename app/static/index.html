@@ -405,8 +405,9 @@
     .col-desc { display: none; }
     /* Hide button labels on small screens, show only icons */
     .btn-label { display: none; }
-    /* Contain table overflow inside the card, not the whole page */
-    .card { overflow-x: auto; }
+    /* Prevent table overflow — wrap long content instead of scrolling */
+    .card { overflow-x: hidden; }
+    td code { white-space: pre-wrap; word-break: break-all; }
   }
   /* ── Dropdown menu ── */
   .dropdown { position: relative; }
