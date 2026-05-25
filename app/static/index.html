@@ -414,21 +414,17 @@
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      padding: 12px 16px;
+      padding: 10px 16px;
+      gap: 2px;
       border-bottom: 1px solid var(--border);
-      gap: 4px;
     }
     table.mobile-stack tbody tr:not(.group-header):last-child { border-bottom: none; }
-    table.mobile-stack tbody td:not([colspan]) {
-      display: block;
-      padding: 0;
-      border: none;
-    }
-    table.mobile-stack td.m-name  { flex: 0 0 100%; font-size: 14px; }
-    table.mobile-stack td.m-sub   { flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 2px; }
-    table.mobile-stack td.m-meta  { flex: 1; font-size: 12px; }
-    table.mobile-stack td.m-actions { flex: 0 0 auto; margin-left: auto; }
-    table.mobile-stack td.col-desc { display: none; }
+    table.mobile-stack tbody td { border: none; padding: 0; }
+    table.mobile-stack td.m-name    { flex: 1; font-size: 14px; min-width: 0; }
+    table.mobile-stack td.m-sub     { flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    table.mobile-stack td.m-meta    { display: none; }
+    table.mobile-stack td.m-actions { flex: 0 0 auto; }
+    table.mobile-stack td.col-desc  { display: none; }
     table.mobile-stack td.col-desktop { display: none; }
   }
   /* ── Dropdown menu ── */
@@ -842,16 +838,13 @@ function renderServers() {
     const nameStyle = depth > 0 ? ` style="padding-left:${16 + depth * 16}px"` : '';
     return `<tr>
       <td class="m-name"${nameStyle}><strong>${escape(s.name)}</strong></td>
-      <td class="m-sub"><code style="color:var(--blue)">${escape(s.host)}</code> <span style="color:var(--muted);font-size:11px">${escape(s.port)} · <span class="badge badge-${s.type}" style="font-size:10px">${s.type.toUpperCase()}</span></span></td>
-      <td class="m-meta col-desktop">${escape(s.port)}</td>
-      <td class="col-desktop"><span class="badge badge-${s.type}">${s.type.toUpperCase()}</span></td>
-      <td class="m-meta col-desktop">${credCell}</td>
-      <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
       <td class="m-actions"><div class="actions">
         <button class="icon-btn" onclick="openModal('server',${s.id})">Edit</button>
         <button class="icon-btn" onclick="cloneServer(${s.id})">Clone</button>
         <button class="icon-btn del" onclick="del('server',${s.id})">Delete</button>
       </div></td>
+      <td class="m-sub"><code style="color:var(--blue)">${escape(s.host)}</code> <span style="color:var(--muted);font-size:11px">· ${escape(s.port)} · <span class="badge badge-${s.type}" style="font-size:10px;padding:1px 5px">${s.type.toUpperCase()}</span>${cred ? ` · <span class="badge badge-key" style="font-size:10px;padding:1px 5px">${escape(cred.name)}</span>` : ''}</span></td>
+      <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
     </tr>`;
   };
 
@@ -939,15 +932,14 @@ function renderCredentials() {
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
-      <td class="m-sub"><code>${escape(c.username)}</code></td>
-      <td class="m-meta">${badge}</td>
-      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
       <td class="m-actions">
         <div class="actions">
           <button class="icon-btn" onclick="openModal('credential',${c.id})">Edit</button>
           <button class="icon-btn del" onclick="del('credential',${c.id})">Delete</button>
         </div>
       </td>
+      <td class="m-sub"><code>${escape(c.username)}</code> <span style="margin-left:4px">${badge}</span></td>
+      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
     </tr>`;
   }).join('');
 }
@@ -964,14 +956,14 @@ function renderCommands() {
   tbody.innerHTML = state.commands.map(c => `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
-      <td class="m-sub"><code style="color:var(--warn);font-size:12px">${escape(c.command)}</code></td>
-      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
       <td class="m-actions">
         <div class="actions">
           <button class="icon-btn" onclick="openModal('command',${c.id})">Edit</button>
           <button class="icon-btn del" onclick="del('command',${c.id})">Delete</button>
         </div>
       </td>
+      <td class="m-sub"><code style="color:var(--warn);font-size:12px;white-space:pre-wrap;word-break:break-all">${escape(c.command)}</code></td>
+      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
     </tr>`).join('');
 }
 
