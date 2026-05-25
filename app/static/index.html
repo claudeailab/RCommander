@@ -431,6 +431,15 @@
     table.mobile-stack td.col-desktop { display: none; }
     .m-only { display: inline; }
   }
+  /* ── Locked server indicator ── */
+  .server-locked-note {
+    font-size: 11px;
+    color: var(--blue);
+    margin-top: 4px;
+    display: none;
+  }
+  .server-locked-note.visible { display: block; }
+  select:disabled, select[disabled] { opacity: 0.45; cursor: not-allowed; }
   /* ── Dropdown menu ── */
   .dropdown { position: relative; }
   .dropdown-menu {
@@ -640,10 +649,14 @@
             <select id="exec-server">
               <option value="">— select server —</option>
             </select>
+            <div class="server-locked-note" id="exec-server-locked-note">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              Locked by command
+            </div>
           </div>
           <div>
             <h3>COMMAND</h3>
-            <select id="exec-command">
+            <select id="exec-command" onchange="onExecCommandChange()">
               <option value="">— select command —</option>
             </select>
           </div>
@@ -974,10 +987,15 @@ function renderCommands() {
     );
     return;
   }
+  const serverMap = new Map(state.servers.map(s => [s.id, s]));
   tbody.innerHTML = state.commands.map(c => {
+    const linkedServer = c.server_id ? serverMap.get(c.server_id) : null;
+    const serverBadge = linkedServer
+      ? `<span class="badge" style="background:#1c3a5e;color:#58a6ff;font-size:10px;padding:1px 6px;margin-left:6px" title="Locked to this server">${escape(linkedServer.name)}</span>`
+      : '';
     return `
     <tr>
-      <td class="m-name"><strong>${escape(c.name)}</strong></td>
+      <td class="m-name"><strong>${escape(c.name)}</strong>${serverBadge}</td>
       <td class="m-actions">
         <div class="actions">
           <button class="icon-btn" title="Edit" onclick="openModal('command',${c.id})">
@@ -1228,6 +1246,7 @@ function openModal(type, id = null, defaultGroup = '') {
 
   if (type === 'command') {
     const c = id ? state.commands.find(x => x.id === id) : null;
+    const sortedServers = [...state.servers].sort((a, b) => a.name.localeCompare(b.name));
     modalBox.innerHTML = `
       ${modalHeader(`${c ? 'Edit' : 'Add'} Command`)}
       <div class="form-group">
@@ -1237,6 +1256,14 @@ function openModal(type, id = null, defaultGroup = '') {
       <div class="form-group">
         <label>Command</label>
         <textarea id="f-command" rows="3" placeholder="df -h">${escape(c?.command ?? '')}</textarea>
+      </div>
+      <div class="form-group">
+        <label>Default Server</label>
+        <select id="f-server-id">
+          <option value="">— any server —</option>
+          ${sortedServers.map(s => `<option value="${s.id}" ${c?.server_id===s.id?'selected':''}>${escape(s.name)} (${escape(s.host)})</option>`).join('')}
+        </select>
+        <div class="hint">When selected, the server field on Execute will be locked to this server</div>
       </div>
       <div class="form-group">
         <label>Description</label>
@@ -1314,8 +1341,9 @@ async function saveCredential() {
 }
 
 async function saveCommand() {
+  const serverIdVal = document.getElementById('f-server-id')?.value;
   const body = { name: val('f-name'), command: document.getElementById('f-command')?.value?.trim() ?? '',
-    description: val('f-desc') };
+    description: val('f-desc'), server_id: serverIdVal ? parseInt(serverIdVal) : null };
   if (!body.name || !body.command) { toast('Name and Command are required', 'fail'); return; }
   await saveEntity('commands', 'Command', body);
 }
@@ -1332,6 +1360,26 @@ async function del(type, id) {
 }
 
 // ── Execute ───────────────────────────────────────────────────────────────────
+
+function onExecCommandChange() {
+  const cmdId = parseInt(document.getElementById('exec-command').value);
+  const cmd = state.commands.find(c => c.id === cmdId);
+  const serverSel = document.getElementById('exec-server');
+  const folderPath = document.getElementById('exec-folder-path');
+  const lockedNote = document.getElementById('exec-server-locked-note');
+
+  if (cmd?.server_id) {
+    // Lock server selectors to the command's linked server
+    serverSel.value = cmd.server_id;
+    serverSel.disabled = true;
+    folderPath.querySelectorAll('select').forEach(s => s.disabled = true);
+    lockedNote.classList.add('visible');
+  } else {
+    serverSel.disabled = false;
+    folderPath.querySelectorAll('select').forEach(s => s.disabled = false);
+    lockedNote.classList.remove('visible');
+  }
+}
 
 let _running = false;
 let _term = null;

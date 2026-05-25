@@ -50,6 +50,7 @@ class CommandRow(Base):
     name = Column(String, unique=True, nullable=False)
     command = Column(Text, nullable=False)
     description = Column(Text, default="")
+    server_id = Column(Integer, nullable=True)
 
 
 class GroupRow(Base):
@@ -68,7 +69,8 @@ def _migrate():
                         ("credential_id", "INTEGER"),
                         ("server_group",  "TEXT NOT NULL DEFAULT ''")],
         "credentials": [("description",   "TEXT NOT NULL DEFAULT ''")],
-        "commands":    [("description",   "TEXT NOT NULL DEFAULT ''")],
+        "commands":    [("description",   "TEXT NOT NULL DEFAULT ''"),
+                        ("server_id",     "INTEGER")],
     }
     with engine.connect() as conn:
         for table, columns in migrations.items():
@@ -108,6 +110,7 @@ class CommandIn(BaseModel):
     name: str
     command: str
     description: str = ""
+    server_id: Optional[int] = None
 
 
 class ExecuteRequest(BaseModel):
