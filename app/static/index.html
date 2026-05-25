@@ -414,19 +414,25 @@
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      padding: 10px 16px;
+      padding: 8px 16px;
       gap: 2px;
       border-bottom: 1px solid var(--border);
     }
     table.mobile-stack tbody tr:not(.group-header):last-child { border-bottom: none; }
     table.mobile-stack tbody td { border: none; padding: 0; }
-    table.mobile-stack td.m-name    { flex: 1; font-size: 14px; min-width: 0; }
-    table.mobile-stack td.m-sub     { flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    table.mobile-stack td.m-name    { flex: 1; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    table.mobile-stack td.m-sub     { flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     table.mobile-stack td.m-meta    { display: none; }
     table.mobile-stack td.m-actions { flex: 0 0 auto; }
     table.mobile-stack td.col-desc  { display: none; }
     table.mobile-stack td.col-desktop { display: none; }
+    /* Per-row action menu: on mobile show ⋮, hide full buttons */
+    .row-full-actions { display: none; }
+    .row-menu { display: block; }
   }
+  /* Per-row action menu: desktop shows full buttons, hides ⋮ */
+  .row-full-actions { display: flex; }
+  .row-menu { display: none; }
   /* ── Dropdown menu ── */
   .dropdown { position: relative; }
   .dropdown-menu {
@@ -832,17 +838,25 @@ function renderServers() {
 
   const serverRow = (s, depth = 0) => {
     const cred = credMap.get(s.credential_id);
-    const credCell = cred
-      ? `<span class="badge badge-key" style="font-size:11px">${escape(cred.name)}</span>`
-      : `<span style="color:var(--muted);font-size:12px">—</span>`;
     const nameStyle = depth > 0 ? ` style="padding-left:${16 + depth * 16}px"` : '';
+    const rid = `row-s-${s.id}`;
     return `<tr>
       <td class="m-name"${nameStyle}><strong>${escape(s.name)}</strong></td>
-      <td class="m-actions"><div class="actions">
-        <button class="icon-btn" onclick="openModal('server',${s.id})">Edit</button>
-        <button class="icon-btn" onclick="cloneServer(${s.id})">Clone</button>
-        <button class="icon-btn del" onclick="del('server',${s.id})">Delete</button>
-      </div></td>
+      <td class="m-actions">
+        <div class="row-full-actions actions">
+          <button class="icon-btn" onclick="openModal('server',${s.id})">Edit</button>
+          <button class="icon-btn" onclick="cloneServer(${s.id})">Clone</button>
+          <button class="icon-btn del" onclick="del('server',${s.id})">Delete</button>
+        </div>
+        <div class="row-menu dropdown" id="${rid}">
+          <button class="icon-btn" onclick="toggleDropdown('${rid}')" style="font-size:18px;padding:0 6px">⋮</button>
+          <div class="dropdown-menu" style="right:0;left:auto;min-width:120px">
+            <button class="dropdown-item" onclick="closeDropdowns();openModal('server',${s.id})">Edit</button>
+            <button class="dropdown-item" onclick="closeDropdowns();cloneServer(${s.id})">Clone</button>
+            <button class="dropdown-item" style="color:var(--red)" onclick="closeDropdowns();del('server',${s.id})">Delete</button>
+          </div>
+        </div>
+      </td>
       <td class="m-sub"><code style="color:var(--blue)">${escape(s.host)}</code> <span style="color:var(--muted);font-size:11px">· ${escape(s.port)} · <span class="badge badge-${s.type}" style="font-size:10px;padding:1px 5px">${s.type.toUpperCase()}</span>${cred ? ` · <span class="badge badge-key" style="font-size:10px;padding:1px 5px">${escape(cred.name)}</span>` : ''}</span></td>
       <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
     </tr>`;
@@ -929,13 +943,21 @@ function renderCredentials() {
       : c.has_password
         ? '<span class="badge badge-pw">Password</span>'
         : '<span class="badge" style="background:#1f2937;color:var(--muted)">None</span>';
+    const rid = `row-c-${c.id}`;
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
       <td class="m-actions">
-        <div class="actions">
+        <div class="row-full-actions actions">
           <button class="icon-btn" onclick="openModal('credential',${c.id})">Edit</button>
           <button class="icon-btn del" onclick="del('credential',${c.id})">Delete</button>
+        </div>
+        <div class="row-menu dropdown" id="${rid}">
+          <button class="icon-btn" onclick="toggleDropdown('${rid}')" style="font-size:18px;padding:0 6px">⋮</button>
+          <div class="dropdown-menu" style="right:0;left:auto;min-width:120px">
+            <button class="dropdown-item" onclick="closeDropdowns();openModal('credential',${c.id})">Edit</button>
+            <button class="dropdown-item" style="color:var(--red)" onclick="closeDropdowns();del('credential',${c.id})">Delete</button>
+          </div>
         </div>
       </td>
       <td class="m-sub"><code>${escape(c.username)}</code> <span style="margin-left:4px">${badge}</span></td>
@@ -953,18 +975,28 @@ function renderCommands() {
     );
     return;
   }
-  tbody.innerHTML = state.commands.map(c => `
+  tbody.innerHTML = state.commands.map(c => {
+    const rid = `row-cmd-${c.id}`;
+    return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
       <td class="m-actions">
-        <div class="actions">
+        <div class="row-full-actions actions">
           <button class="icon-btn" onclick="openModal('command',${c.id})">Edit</button>
           <button class="icon-btn del" onclick="del('command',${c.id})">Delete</button>
+        </div>
+        <div class="row-menu dropdown" id="${rid}">
+          <button class="icon-btn" onclick="toggleDropdown('${rid}')" style="font-size:18px;padding:0 6px">⋮</button>
+          <div class="dropdown-menu" style="right:0;left:auto;min-width:120px">
+            <button class="dropdown-item" onclick="closeDropdowns();openModal('command',${c.id})">Edit</button>
+            <button class="dropdown-item" style="color:var(--red)" onclick="closeDropdowns();del('command',${c.id})">Delete</button>
+          </div>
         </div>
       </td>
       <td class="m-sub"><code style="color:var(--warn);font-size:12px;white-space:pre-wrap;word-break:break-all">${escape(c.command)}</code></td>
       <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 let _execPath = null; // null = no folder selected yet; '' = root (ungrouped)
