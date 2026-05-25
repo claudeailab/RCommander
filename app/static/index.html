@@ -410,7 +410,7 @@
     td code { white-space: pre-wrap; word-break: break-all; }
     /* Stacked card layout for tables on mobile */
     table.mobile-stack thead { display: none; }
-    table.mobile-stack tbody tr {
+    table.mobile-stack tbody tr:not(.group-header) {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
@@ -418,8 +418,8 @@
       border-bottom: 1px solid var(--border);
       gap: 4px;
     }
-    table.mobile-stack tbody tr:last-child { border-bottom: none; }
-    table.mobile-stack tbody td {
+    table.mobile-stack tbody tr:not(.group-header):last-child { border-bottom: none; }
+    table.mobile-stack tbody td:not([colspan]) {
       display: block;
       padding: 0;
       border: none;
