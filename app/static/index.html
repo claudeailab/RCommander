@@ -393,6 +393,8 @@
   .folder-node.f-none { color: var(--muted); font-style: italic; }
   /* m-sub is a mobile-only second line; hide it on desktop */
   table.mobile-stack td.m-sub { display: none; }
+  /* m-only elements are hidden on desktop, shown inline on mobile */
+  .m-only { display: none; }
   @media (max-width: 768px) {
     .sidebar { display: none; }
     .mobile-nav { display: block; }
@@ -427,6 +429,7 @@
     table.mobile-stack td.m-actions { flex: 0 0 auto; }
     table.mobile-stack td.col-desc  { display: none; }
     table.mobile-stack td.col-desktop { display: none; }
+    .m-only { display: inline; }
   }
   /* ── Dropdown menu ── */
   .dropdown { position: relative; }
@@ -675,7 +678,7 @@ const state = { servers: [], credentials: [], commands: [], groups: [] };
 const overlay  = document.getElementById('overlay');
 const modalBox = document.getElementById('modal-box');
 
-// ── API ────────────────────────────────────────────────────────────────────────────
+// ── API ───────────────────────────────────────────────────────────────────────
 
 async function api(method, path, body) {
   const res = await fetch(path, {
@@ -708,7 +711,7 @@ async function loadAll() {
   refreshExecuteDropdowns();
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────────
+// ── Render ────────────────────────────────────────────────────────────────────
 
 function escape(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -718,7 +721,7 @@ function emptyRow(colspan, svg, msg) {
   return `<tr><td colspan="${colspan}"><div class="empty-state">${svg}<p>${msg}</p></div></td></tr>`;
 }
 
-// ── Folder tree helpers ─────────────────────────────────────────────────────────
+// ── Folder tree helpers ───────────────────────────────────────────────────────
 
 function buildFolderNodes() {
   const nodes = {};
@@ -835,7 +838,7 @@ function renderServers() {
     const cred = credMap.get(s.credential_id);
     const nameStyle = depth > 0 ? ` style="padding-left:${16 + depth * 16}px"` : '';
     return `<tr>
-      <td class="m-name"${nameStyle}><strong>${escape(s.name)}</strong></td>
+      <td class="m-name"${nameStyle}><strong>${escape(s.name)}</strong><code class="m-only" style="color:var(--blue);font-size:12px;font-weight:normal;margin-left:8px">${escape(s.host)}</code></td>
       <td class="col-desktop" style="color:var(--blue);font-size:13px"><code>${escape(s.host)}</code></td>
       <td class="col-desktop" style="color:var(--muted);font-size:12px">${escape(s.port)}</td>
       <td class="col-desktop"><span class="badge badge-${s.type}" style="font-size:10px;padding:1px 5px">${s.type.toUpperCase()}</span></td>
@@ -857,7 +860,6 @@ function renderServers() {
           </button>
         </div>
       </td>
-      <td class="m-sub"><code style="color:var(--blue)">${escape(s.host)}</code></td>
     </tr>`;
   };
 
@@ -1076,7 +1078,7 @@ function refreshExecuteDropdowns() {
   sel('exec-command', state.commands, 'select command');
 }
 
-// ── Dropdown menus ─────────────────────────────────────────────────────────────────────
+// ── Dropdown menus ────────────────────────────────────────────────────────────
 
 function toggleDropdown(id) {
   const menu = document.querySelector(`#${id} .dropdown-menu`);
@@ -1093,7 +1095,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.dropdown')) closeDropdowns();
 });
 
-// ── Tabs ────────────────────────────────────────────────────────────────────────────
+// ── Tabs ──────────────────────────────────────────────────────────────────────
 
 function switchTab(tab) {
   document.querySelectorAll('[id^="tab-"]').forEach(el => el.style.display = 'none');
@@ -1111,7 +1113,7 @@ document.addEventListener('change', e => {
   if (e.target.id === 'f-port') _portTouched = true;
 });
 
-// ── Modal ───────────────────────────────────────────────────────────────────────────
+// ── Modal ─────────────────────────────────────────────────────────────────────
 
 let _editId = null;
 let _portTouched = false;
@@ -1329,7 +1331,7 @@ async function del(type, id) {
   } catch(e) { toast(e.message, 'fail'); }
 }
 
-// ── Execute ──────────────────────────────────────────────────────────────────────────
+// ── Execute ───────────────────────────────────────────────────────────────────
 
 let _running = false;
 let _term = null;
@@ -1410,7 +1412,7 @@ function appendTerm(cls, text) {
   term.scrollTop = term.scrollHeight;
 }
 
-// ── Toast ────────────────────────────────────────────────────────────────────────────
+// ── Toast ─────────────────────────────────────────────────────────────────────
 
 function toast(msg, type = 'ok') {
   const el = document.createElement('div');
@@ -1420,7 +1422,7 @@ function toast(msg, type = 'ok') {
   setTimeout(() => el.remove(), 3500);
 }
 
-// ── Folder actions ────────────────────────────────────────────────────────────────────
+// ── Folder actions ────────────────────────────────────────────────────────────
 
 function openNewFolderModal(parentPath) {
   const title = parentPath ? `New Subfolder in "${parentPath}"` : 'New Folder';
@@ -1491,9 +1493,9 @@ async function deleteGroup(path) {
   } catch(e) { toast(e.message, 'fail'); }
 }
 
-// ── CSV Import ─────────────────────────────────────────────────────────────────────────
+// ── CSV Import ────────────────────────────────────────────────────────────────
 
-// ── Export ────────────────────────────────────────────────────────────────────────────
+// ── Export ────────────────────────────────────────────────────────────────────
 
 function exportServers() {
   const credMap = new Map(state.credentials.map(c => [c.id, c]));
@@ -1518,7 +1520,7 @@ function exportServers() {
   URL.revokeObjectURL(url);
 }
 
-// ── Import ────────────────────────────────────────────────────────────────────────────
+// ── Import ────────────────────────────────────────────────────────────────────
 
 let _importRows = [];
 
@@ -1651,7 +1653,7 @@ async function runImport() {
   }
 }
 
-// ── Init ────────────────────────────────────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────────────────────
 
 loadAll().catch(e => toast('Failed to load data: ' + e.message, 'fail'));
 </script>
