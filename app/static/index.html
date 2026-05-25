@@ -391,10 +391,8 @@
   .folder-node:hover { background: #1f2937; }
   .folder-node.f-selected { background: #1c3a5e; color: #58a6ff; }
   .folder-node.f-none { color: var(--muted); font-style: italic; }
-  /* Per-row action menu: desktop default — show full buttons, hide ⋮ */
-  .row-full-actions { display: flex; }
-  .row-menu { display: none; }
-
+  /* m-sub is a mobile-only second line; hide it on desktop */
+  table.mobile-stack td.m-sub { display: none; }
   @media (max-width: 768px) {
     .sidebar { display: none; }
     .mobile-nav { display: block; }
@@ -424,14 +422,11 @@
     table.mobile-stack tbody tr:not(.group-header):last-child { border-bottom: none; }
     table.mobile-stack tbody td { border: none; padding: 0; }
     table.mobile-stack td.m-name    { flex: 1; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    table.mobile-stack td.m-sub     { flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    table.mobile-stack td.m-sub     { display: block; flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     table.mobile-stack td.m-meta    { display: none; }
     table.mobile-stack td.m-actions { flex: 0 0 auto; }
     table.mobile-stack td.col-desc  { display: none; }
     table.mobile-stack td.col-desktop { display: none; }
-    /* Per-row action menu: on mobile show ⋮, hide full buttons */
-    .row-full-actions { display: none; }
-    .row-menu { display: block; }
   }
   /* ── Dropdown menu ── */
   .dropdown { position: relative; }
@@ -555,7 +550,7 @@
           <thead>
             <tr>
               <th>Name</th>
-              <th>Host</th>
+              <th class="col-desktop">Host</th>
               <th class="col-desktop">Port</th>
               <th class="col-desktop">Type</th>
               <th class="col-desktop">Credential</th>
@@ -839,26 +834,30 @@ function renderServers() {
   const serverRow = (s, depth = 0) => {
     const cred = credMap.get(s.credential_id);
     const nameStyle = depth > 0 ? ` style="padding-left:${16 + depth * 16}px"` : '';
-    const rid = `row-s-${s.id}`;
     return `<tr>
       <td class="m-name"${nameStyle}><strong>${escape(s.name)}</strong></td>
+      <td class="col-desktop" style="color:var(--blue);font-size:13px"><code>${escape(s.host)}</code></td>
+      <td class="col-desktop" style="color:var(--muted);font-size:12px">${escape(s.port)}</td>
+      <td class="col-desktop"><span class="badge badge-${s.type}" style="font-size:10px;padding:1px 5px">${s.type.toUpperCase()}</span></td>
+      <td class="col-desktop">${cred ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px">${escape(cred.name)}</span>` : '<span style="color:var(--muted);font-size:12px">—</span>'}</td>
+      <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
       <td class="m-actions">
-        <div class="row-full-actions actions">
-          <button class="icon-btn" onclick="openModal('server',${s.id})">Edit</button>
-          <button class="icon-btn" onclick="cloneServer(${s.id})">Clone</button>
-          <button class="icon-btn del" onclick="del('server',${s.id})">Delete</button>
-        </div>
-        <div class="row-menu dropdown" id="${rid}">
-          <button class="icon-btn" onclick="toggleDropdown('${rid}')" style="font-size:18px;padding:0 6px">⋮</button>
-          <div class="dropdown-menu" style="right:0;left:auto;min-width:120px">
-            <button class="dropdown-item" onclick="closeDropdowns();openModal('server',${s.id})">Edit</button>
-            <button class="dropdown-item" onclick="closeDropdowns();cloneServer(${s.id})">Clone</button>
-            <button class="dropdown-item" style="color:var(--red)" onclick="closeDropdowns();del('server',${s.id})">Delete</button>
-          </div>
+        <div class="actions">
+          <button class="icon-btn" title="Edit" onclick="openModal('server',${s.id})">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            <span class="btn-label">Edit</span>
+          </button>
+          <button class="icon-btn" title="Clone" onclick="cloneServer(${s.id})">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span class="btn-label">Clone</span>
+          </button>
+          <button class="icon-btn del" title="Delete" onclick="del('server',${s.id})">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+            <span class="btn-label">Delete</span>
+          </button>
         </div>
       </td>
-      <td class="m-sub"><code style="color:var(--blue)">${escape(s.host)}</code> <span style="color:var(--muted);font-size:11px">· ${escape(s.port)} · <span class="badge badge-${s.type}" style="font-size:10px;padding:1px 5px">${s.type.toUpperCase()}</span>${cred ? ` · <span class="badge badge-key" style="font-size:10px;padding:1px 5px">${escape(cred.name)}</span>` : ''}</span></td>
-      <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
+      <td class="m-sub"><code style="color:var(--blue)">${escape(s.host)}</code></td>
     </tr>`;
   };
 
@@ -943,21 +942,19 @@ function renderCredentials() {
       : c.has_password
         ? '<span class="badge badge-pw">Password</span>'
         : '<span class="badge" style="background:#1f2937;color:var(--muted)">None</span>';
-    const rid = `row-c-${c.id}`;
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
       <td class="m-actions">
-        <div class="row-full-actions actions">
-          <button class="icon-btn" onclick="openModal('credential',${c.id})">Edit</button>
-          <button class="icon-btn del" onclick="del('credential',${c.id})">Delete</button>
-        </div>
-        <div class="row-menu dropdown" id="${rid}">
-          <button class="icon-btn" onclick="toggleDropdown('${rid}')" style="font-size:18px;padding:0 6px">⋮</button>
-          <div class="dropdown-menu" style="right:0;left:auto;min-width:120px">
-            <button class="dropdown-item" onclick="closeDropdowns();openModal('credential',${c.id})">Edit</button>
-            <button class="dropdown-item" style="color:var(--red)" onclick="closeDropdowns();del('credential',${c.id})">Delete</button>
-          </div>
+        <div class="actions">
+          <button class="icon-btn" title="Edit" onclick="openModal('credential',${c.id})">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            <span class="btn-label">Edit</span>
+          </button>
+          <button class="icon-btn del" title="Delete" onclick="del('credential',${c.id})">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+            <span class="btn-label">Delete</span>
+          </button>
         </div>
       </td>
       <td class="m-sub"><code>${escape(c.username)}</code> <span style="margin-left:4px">${badge}</span></td>
@@ -976,21 +973,19 @@ function renderCommands() {
     return;
   }
   tbody.innerHTML = state.commands.map(c => {
-    const rid = `row-cmd-${c.id}`;
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
       <td class="m-actions">
-        <div class="row-full-actions actions">
-          <button class="icon-btn" onclick="openModal('command',${c.id})">Edit</button>
-          <button class="icon-btn del" onclick="del('command',${c.id})">Delete</button>
-        </div>
-        <div class="row-menu dropdown" id="${rid}">
-          <button class="icon-btn" onclick="toggleDropdown('${rid}')" style="font-size:18px;padding:0 6px">⋮</button>
-          <div class="dropdown-menu" style="right:0;left:auto;min-width:120px">
-            <button class="dropdown-item" onclick="closeDropdowns();openModal('command',${c.id})">Edit</button>
-            <button class="dropdown-item" style="color:var(--red)" onclick="closeDropdowns();del('command',${c.id})">Delete</button>
-          </div>
+        <div class="actions">
+          <button class="icon-btn" title="Edit" onclick="openModal('command',${c.id})">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            <span class="btn-label">Edit</span>
+          </button>
+          <button class="icon-btn del" title="Delete" onclick="del('command',${c.id})">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+            <span class="btn-label">Delete</span>
+          </button>
         </div>
       </td>
       <td class="m-sub"><code style="color:var(--warn);font-size:12px;white-space:pre-wrap;word-break:break-all">${escape(c.command)}</code></td>
