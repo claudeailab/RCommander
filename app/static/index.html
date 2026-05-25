@@ -896,6 +896,7 @@ function renderServers() {
           </span>
           <span style="display:flex;gap:6px">
             <button class="icon-btn" style="font-size:11px" data-action="new-sub" data-group="${escape(path)}">+ Sub</button>
+            <button class="icon-btn" style="font-size:11px" data-action="move" data-group="${escape(path)}">Move</button>
             <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
             <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">Delete</button>
           </span>
@@ -928,6 +929,7 @@ function renderServers() {
       if (btn) {
         if (btn.dataset.action === 'rename') openRenameGroupModal(btn.dataset.group);
         else if (btn.dataset.action === 'new-sub') openNewFolderModal(btn.dataset.group);
+        else if (btn.dataset.action === 'move') openMoveGroupModal(btn.dataset.group);
         else deleteGroup(btn.dataset.group);
         return;
       }
@@ -1526,6 +1528,71 @@ function openRenameGroupModal(fullPath) {
   });
   overlay.classList.remove('hidden');
   setTimeout(() => document.getElementById('f-group-name')?.select(), 50);
+}
+
+function openMoveGroupModal(fullPath) {
+  const leafName = fullPath.split('/').pop();
+  // Build list of valid destination folders: all groups except the folder itself and its descendants
+  const prefix = fullPath + '/';
+  const destinations = state.groups.filter(g => g !== fullPath && !g.startsWith(prefix));
+
+  let destValue = '';
+  const renderTree = () => {
+    const { nodes, roots } = buildFolderNodes();
+    // Filter out the folder being moved and its children from the picker
+    const validRoots = [...roots].filter(r => r !== fullPath && !r.startsWith(prefix));
+
+    function nodeHTML(path, indent) {
+      if (path === fullPath || path.startsWith(prefix)) return '';
+      const label = path.split('/').pop();
+      const selected = path === destValue;
+      const children = [...(nodes[path] || new Set())].filter(c => c !== fullPath && !c.startsWith(prefix)).sort();
+      const padLeft = 12 + indent * 16;
+      let h = `<div class="folder-node${selected ? ' f-selected' : ''}" data-dest="${escape(path)}" style="padding-left:${padLeft}px">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        ${escape(label)}
+      </div>`;
+      for (const child of children) h += nodeHTML(child, indent + 1);
+      return h;
+    }
+    return validRoots.map(r => nodeHTML(r, 0)).join('');
+  };
+
+  modalBox.innerHTML = `
+    ${modalHeader(`Move "${escape(leafName)}" into…`)}
+    <div class="hint" style="margin-bottom:4px">Select a destination folder, or leave unselected to move to root level.</div>
+    <div class="folder-tree" id="move-dest-tree" style="max-height:260px">
+      <div class="folder-node f-selected" data-dest="" style="padding-left:12px">(root level)</div>
+      ${renderTree()}
+    </div>
+    <div class="hint" id="move-dest-hint">Destination: root level</div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="move-confirm-btn">Move</button>
+    </div>`;
+
+  const tree = modalBox.querySelector('#move-dest-tree');
+  const hint = modalBox.querySelector('#move-dest-hint');
+
+  tree.addEventListener('click', e => {
+    const node = e.target.closest('[data-dest]');
+    if (!node) return;
+    destValue = node.dataset.dest;
+    tree.querySelectorAll('.folder-node').forEach(n => n.classList.remove('f-selected'));
+    node.classList.add('f-selected');
+    hint.textContent = destValue ? `Destination: ${destValue}` : 'Destination: root level';
+  });
+
+  modalBox.querySelector('#move-confirm-btn').addEventListener('click', async () => {
+    const newPath = destValue ? destValue + '/' + leafName : leafName;
+    if (newPath === fullPath) { closeModal(); return; }
+    try {
+      await api('PUT', '/api/groups/rename', { old_name: fullPath, new_name: newPath });
+      closeModal(); await loadAll(); toast('Folder moved');
+    } catch(e) { toast(e.message, 'fail'); }
+  });
+
+  overlay.classList.remove('hidden');
 }
 
 async function deleteGroup(path) {
