@@ -982,7 +982,7 @@ function renderCredentials() {
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
-      <td class="m-sub" style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0"><code style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">${escape(c.username)}</code>${badge}</td>
+      <td class="m-sub" style="display:flex;align-items:center;gap:6px;min-width:0"><code style="white-space:nowrap">${escape(c.username)}</code>${badge}</td>
       <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
       <td class="m-actions">
         <div class="actions">
