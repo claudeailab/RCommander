@@ -696,9 +696,12 @@
               </div>
               <div class="cmd-select-menu" id="exec-cmd-menu"></div>
             </div>
-            <div id="exec-command-server-badge" style="display:none;margin-top:6px;font-size:12px;color:var(--muted)">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              Locked to: <span id="exec-command-server-name" style="color:#58a6ff;font-weight:500"></span>
+            <div id="exec-command-server-badge" style="display:none;margin-top:6px;font-size:12px;color:var(--muted);display:none;align-items:center;gap:8px">
+              <span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                Locked to: <span id="exec-command-server-name" style="color:#58a6ff;font-weight:500"></span>
+              </span>
+              <button class="icon-btn" style="font-size:11px;padding:1px 7px" onclick="resetExecSelection()">✕ Unlock</button>
             </div>
           </div>
           <button class="btn btn-run" id="run-btn" onclick="runCommand()">
@@ -1476,7 +1479,7 @@ function onExecCommandChange() {
     folderPath.querySelectorAll('select').forEach(s => s.disabled = true);
     lockedNote.classList.add('visible');
     cmdBadgeName.textContent = linkedServer ? linkedServer.name : cmd.server_id;
-    cmdBadge.style.display = 'block';
+    cmdBadge.style.display = 'flex';
   } else {
     serverSel.disabled = false;
     folderPath.querySelectorAll('select').forEach(s => s.disabled = false);
@@ -1484,6 +1487,12 @@ function onExecCommandChange() {
     cmdBadge.style.display = 'none';
   }
   _renderCmdSelect(cmdId);
+}
+
+function resetExecSelection() {
+  document.getElementById('exec-command').value = '';
+  document.getElementById('exec-server').value = '';
+  onExecCommandChange();
 }
 
 let _running = false;
