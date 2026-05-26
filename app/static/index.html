@@ -1112,6 +1112,7 @@ function _updateExecServerOptions() {
 }
 
 function refreshExecuteDropdowns() {
+  const serverMap = new Map(state.servers.map(s => [s.id, s]));
   const sel = (id, items, label) => {
     const el = document.getElementById(id);
     const cur = el.value;
@@ -1119,7 +1120,14 @@ function refreshExecuteDropdowns() {
       items.map(i => `<option value="${i.id}" ${i.id==cur?'selected':''}>${escape(i.name)}</option>`).join('');
   };
   _renderExecFolderPath();
-  sel('exec-command', state.commands, 'select command');
+  const cmdEl = document.getElementById('exec-command');
+  const curCmd = cmdEl.value;
+  cmdEl.innerHTML = `<option value="">— select command —</option>` +
+    state.commands.map(c => {
+      const server = c.server_id ? serverMap.get(c.server_id) : null;
+      const label = server ? `${escape(c.name)} [${escape(server.name)}]` : escape(c.name);
+      return `<option value="${c.id}" ${c.id==curCmd?'selected':''}>${label}</option>`;
+    }).join('');
 }
 
 // ── Dropdown menus ────────────────────────────────────────────────────────────
