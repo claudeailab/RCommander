@@ -395,6 +395,9 @@
   table.mobile-stack td.m-sub { white-space: nowrap; }
   /* Description column: shrinks to content, no unbounded expansion */
   th.col-desc, td.col-desc { width: 1%; }
+  /* Desktop-only / mobile-only helpers for group header buttons */
+  .grp-btns-desktop { display: flex; gap: 6px; }
+  .grp-btn-mobile   { display: none; }
   /* m-only elements are hidden on desktop, shown inline on mobile */
   .m-only { display: none; }
   @media (max-width: 768px) {
@@ -432,6 +435,8 @@
     table.mobile-stack td.col-desc  { display: none; }
     table.mobile-stack td.col-desktop { display: none; }
     .m-only { display: inline; }
+    .grp-btns-desktop { display: none; }
+    .grp-btn-mobile   { display: block; }
   }
   td.m-actions { width: 1%; white-space: nowrap; }
   /* ── Locked server indicator ── */
@@ -896,11 +901,22 @@ function renderServers() {
             <span style="margin-right:8px;font-size:10px">${icon}</span>
             ${escape(label)} <span style="font-weight:400;margin-left:6px">(${countAll(path)})</span>
           </span>
-          <span style="display:flex;gap:6px">
-            <button class="icon-btn" style="font-size:11px" data-action="new-sub" data-group="${escape(path)}">+ Sub</button>
-            <button class="icon-btn" style="font-size:11px" data-action="move" data-group="${escape(path)}">Move</button>
-            <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
-            <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">Delete</button>
+          <span style="display:flex;gap:6px;align-items:center">
+            <span class="grp-btns-desktop" style="gap:6px">
+              <button class="icon-btn" style="font-size:11px" data-action="new-sub" data-group="${escape(path)}">+ Sub</button>
+              <button class="icon-btn" style="font-size:11px" data-action="move" data-group="${escape(path)}">Move</button>
+              <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
+              <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">Delete</button>
+            </span>
+            <span class="grp-btn-mobile dropdown" id="grp-m-${escape(path)}">
+              <button class="icon-btn" style="font-size:16px;padding:2px 8px;line-height:1" onclick="event.stopPropagation();toggleDropdown('grp-m-${escape(path)}')">⋮</button>
+              <div class="dropdown-menu">
+                <button class="dropdown-item" data-action="new-sub" data-group="${escape(path)}">+ Sub-folder</button>
+                <button class="dropdown-item" data-action="move" data-group="${escape(path)}">Move</button>
+                <button class="dropdown-item" data-action="rename" data-group="${escape(path)}">Rename</button>
+                <button class="dropdown-item" style="color:var(--danger-h)" data-action="delete" data-group="${escape(path)}">Delete</button>
+              </div>
+            </span>
           </span>
         </span>
       </td>
