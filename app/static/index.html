@@ -908,8 +908,8 @@ function renderServers() {
               <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
               <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">Delete</button>
             </span>
-            <span class="grp-btn-mobile dropdown" id="grp-m-${escape(path)}">
-              <button class="icon-btn" style="font-size:16px;padding:2px 8px;line-height:1" onclick="event.stopPropagation();toggleDropdown('grp-m-${escape(path)}')">⋮</button>
+            <span class="grp-btn-mobile dropdown" id="grp-m-${path.replace(/[^a-zA-Z0-9]/g,'-')}">
+              <button class="icon-btn" style="font-size:16px;padding:2px 8px;line-height:1" onclick="event.stopPropagation();toggleDropdown('grp-m-${path.replace(/[^a-zA-Z0-9]/g,'-')}')">⋮</button>
               <div class="dropdown-menu">
                 <button class="dropdown-item" data-action="new-sub" data-group="${escape(path)}">+ Sub-folder</button>
                 <button class="dropdown-item" data-action="move" data-group="${escape(path)}">Move</button>
@@ -1119,7 +1119,9 @@ function refreshExecuteDropdowns() {
 // ── Dropdown menus ────────────────────────────────────────────────────────────
 
 function toggleDropdown(id) {
-  const menu = document.querySelector(`#${id} .dropdown-menu`);
+  const container = document.getElementById(id);
+  const menu = container && container.querySelector('.dropdown-menu');
+  if (!menu) return;
   const isOpen = menu.classList.contains('open');
   closeDropdowns();
   if (!isOpen) menu.classList.add('open');
