@@ -423,14 +423,15 @@
     }
     table.mobile-stack tbody tr:not(.group-header):last-child { border-bottom: none; }
     table.mobile-stack tbody td { border: none; padding: 0; }
-    table.mobile-stack td.m-name    { flex: 1; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    table.mobile-stack td.m-sub     { display: block; flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    table.mobile-stack td.m-name    { flex: 1; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; order: 1; }
+    table.mobile-stack td.m-sub     { display: block; flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; order: 3; }
     table.mobile-stack td.m-meta    { display: none; }
-    table.mobile-stack td.m-actions { flex: 0 0 auto; }
+    table.mobile-stack td.m-actions { flex: 0 0 auto; order: 2; }
     table.mobile-stack td.col-desc  { display: none; }
     table.mobile-stack td.col-desktop { display: none; }
     .m-only { display: inline; }
   }
+  td.m-actions { width: 1%; white-space: nowrap; }
   /* ── Locked server indicator ── */
   .server-locked-note {
     font-size: 11px;
@@ -597,8 +598,7 @@
           <thead>
             <tr>
               <th>Name</th>
-              <th>Username</th>
-              <th>Auth</th>
+              <th style="white-space:nowrap">Auth</th>
               <th class="col-desc">Description</th>
               <th></th>
             </tr>
@@ -962,6 +962,8 @@ function renderCredentials() {
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
+      <td class="m-sub" style="white-space:nowrap"><code>${escape(c.username)}</code> <span style="margin-left:4px">${badge}</span></td>
+      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
       <td class="m-actions">
         <div class="actions">
           <button class="icon-btn" title="Edit" onclick="openModal('credential',${c.id})">
@@ -974,8 +976,6 @@ function renderCredentials() {
           </button>
         </div>
       </td>
-      <td class="m-sub"><code>${escape(c.username)}</code> <span style="margin-left:4px">${badge}</span></td>
-      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
     </tr>`;
   }).join('');
 }
@@ -998,6 +998,8 @@ function renderCommands() {
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong>${serverBadge}</td>
+      <td class="m-sub" style="max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><code style="color:var(--warn);font-size:12px">${escape(c.command)}</code></td>
+      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
       <td class="m-actions">
         <div class="actions">
           <button class="icon-btn" title="Edit" onclick="openModal('command',${c.id})">
@@ -1010,8 +1012,6 @@ function renderCommands() {
           </button>
         </div>
       </td>
-      <td class="m-sub"><code style="color:var(--warn);font-size:12px;white-space:pre-wrap;word-break:break-all">${escape(c.command)}</code></td>
-      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
     </tr>`;
   }).join('');
 }
