@@ -1409,6 +1409,9 @@ function onExecCommandChange() {
 
   if (cmd?.server_id) {
     const linkedServer = state.servers.find(s => s.id === cmd.server_id);
+    // Navigate folder path to where the locked server lives so it appears in the dropdown
+    _execPath = linkedServer?.server_group || null;
+    _renderExecFolderPath();
     serverSel.value = cmd.server_id;
     serverSel.disabled = true;
     folderPath.querySelectorAll('select').forEach(s => s.disabled = true);
