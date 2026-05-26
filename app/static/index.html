@@ -391,8 +391,10 @@
   .folder-node:hover { background: #1f2937; }
   .folder-node.f-selected { background: #1c3a5e; color: #58a6ff; }
   .folder-node.f-none { color: var(--muted); font-style: italic; }
-  /* m-sub is a mobile-only second line; hide it on desktop */
-  table.mobile-stack td.m-sub { display: none; }
+  /* m-sub is visible on desktop as a compact table cell */
+  table.mobile-stack td.m-sub { white-space: nowrap; }
+  /* Description column: shrinks to content, no unbounded expansion */
+  th.col-desc, td.col-desc { width: 1%; }
   /* m-only elements are hidden on desktop, shown inline on mobile */
   .m-only { display: none; }
   @media (max-width: 768px) {
