@@ -200,6 +200,30 @@
   #exec-folder-path { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
   #exec-folder-path:empty { display: none; }
   .exec-folder-sel { width: 100%; }
+  /* ── Custom command select ── */
+  .cmd-select { position: relative; width: 100%; }
+  .cmd-select-trigger {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; color: var(--text); font-size: 14px;
+    cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; user-select: none; transition: border-color .15s;
+  }
+  .cmd-select-trigger:hover { border-color: var(--muted); }
+  .cmd-select-trigger svg { flex-shrink: 0; color: var(--muted); }
+  .cmd-select-menu {
+    display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    z-index: 200; max-height: 280px; overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  .cmd-select-menu.open { display: block; }
+  .cmd-select-opt {
+    padding: 8px 12px; cursor: pointer; display: flex; align-items: center;
+    gap: 8px; font-size: 13px; color: var(--text);
+  }
+  .cmd-select-opt:hover { background: #1a2030; }
+  .cmd-select-opt.is-placeholder { color: var(--muted); }
+  .cmd-select-opt.is-selected { background: rgba(56,139,253,.12); }
   .terminal {
     background: #010409;
     border: 1px solid var(--border);
@@ -664,9 +688,14 @@
           </div>
           <div>
             <h3>COMMAND</h3>
-            <select id="exec-command" onchange="onExecCommandChange()">
-              <option value="">— select command —</option>
-            </select>
+            <select id="exec-command" style="display:none"></select>
+            <div class="cmd-select" id="exec-cmd-custom">
+              <div class="cmd-select-trigger" onclick="toggleCmdSelect()">
+                <span id="exec-cmd-label" style="color:var(--muted)">— select command —</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="cmd-select-menu" id="exec-cmd-menu"></div>
+            </div>
             <div id="exec-command-server-badge" style="display:none;margin-top:6px;font-size:12px;color:var(--muted)">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
               Locked to: <span id="exec-command-server-name" style="color:#58a6ff;font-weight:500"></span>
@@ -1112,23 +1141,40 @@ function _updateExecServerOptions() {
   }
 }
 
-function refreshExecuteDropdowns() {
+function _renderCmdSelect(selectedId) {
   const serverMap = new Map(state.servers.map(s => [s.id, s]));
-  const sel = (id, items, label) => {
-    const el = document.getElementById(id);
-    const cur = el.value;
-    el.innerHTML = `<option value="">— ${label} —</option>` +
-      items.map(i => `<option value="${i.id}" ${i.id==cur?'selected':''}>${escape(i.name)}</option>`).join('');
-  };
-  _renderExecFolderPath();
-  const cmdEl = document.getElementById('exec-command');
-  const curCmd = cmdEl.value;
-  cmdEl.innerHTML = `<option value="">— select command —</option>` +
+  const menu = document.getElementById('exec-cmd-menu');
+  const label = document.getElementById('exec-cmd-label');
+  if (!menu || !label) return;
+  const selCmd = selectedId ? state.commands.find(c => c.id == selectedId) : null;
+  const selServer = selCmd?.server_id ? serverMap.get(selCmd.server_id) : null;
+  // Update trigger display
+  if (selCmd) {
+    label.style.color = '';
+    label.innerHTML = escape(selCmd.name) + (selServer
+      ? ` <span class="badge" style="background:#1c3a5e;color:#58a6ff;font-size:10px;padding:1px 6px">${escape(selServer.name)}</span>`
+      : '');
+  } else {
+    label.style.color = 'var(--muted)';
+    label.textContent = '— select command —';
+  }
+  // Render option list
+  menu.innerHTML = `<div class="cmd-select-opt is-placeholder ${!selectedId ? 'is-selected' : ''}" data-value="">— select command —</div>` +
     state.commands.map(c => {
-      const server = c.server_id ? serverMap.get(c.server_id) : null;
-      const label = server ? `${escape(c.name)} [${escape(server.name)}]` : escape(c.name);
-      return `<option value="${c.id}" ${c.id==curCmd?'selected':''}>${label}</option>`;
+      const sv = c.server_id ? serverMap.get(c.server_id) : null;
+      const badge = sv ? `<span class="badge" style="background:#1c3a5e;color:#58a6ff;font-size:10px;padding:1px 6px">${escape(sv.name)}</span>` : '';
+      return `<div class="cmd-select-opt ${c.id == selectedId ? 'is-selected' : ''}" data-value="${c.id}">${escape(c.name)}${badge}</div>`;
     }).join('');
+}
+
+function toggleCmdSelect() {
+  document.getElementById('exec-cmd-menu').classList.toggle('open');
+}
+
+function refreshExecuteDropdowns() {
+  _renderExecFolderPath();
+  const curCmd = document.getElementById('exec-command').value;
+  _renderCmdSelect(curCmd);
 }
 
 // ── Dropdown menus ────────────────────────────────────────────────────────────
@@ -1148,6 +1194,19 @@ function closeDropdowns() {
 
 document.addEventListener('click', e => {
   if (!e.target.closest('.dropdown')) closeDropdowns();
+  if (!e.target.closest('.cmd-select')) {
+    document.querySelectorAll('.cmd-select-menu.open').forEach(m => m.classList.remove('open'));
+  }
+});
+
+document.getElementById('exec-cmd-menu').addEventListener('click', e => {
+  const opt = e.target.closest('.cmd-select-opt');
+  if (!opt) return;
+  const val = opt.dataset.value || '';
+  document.getElementById('exec-command').value = val;
+  document.getElementById('exec-cmd-menu').classList.remove('open');
+  _renderCmdSelect(val);
+  onExecCommandChange();
 });
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -1424,6 +1483,7 @@ function onExecCommandChange() {
     lockedNote.classList.remove('visible');
     cmdBadge.style.display = 'none';
   }
+  _renderCmdSelect(cmdId);
 }
 
 let _running = false;
