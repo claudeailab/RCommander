@@ -854,9 +854,11 @@ function renderServers() {
     nodes[s.server_group].servers.push(s);
   }
 
+  const indent = window.innerWidth <= 768 ? 8 : 16;
+
   const serverRow = (s, depth = 0) => {
     const cred = credMap.get(s.credential_id);
-    const nameStyle = depth > 0 ? ` style="padding-left:${16 + depth * 16}px"` : '';
+    const nameStyle = depth > 0 ? ` style="padding-left:${indent + depth * indent}px"` : '';
     return `<tr>
       <td class="m-name"${nameStyle}><strong>${escape(s.name)}</strong><code class="m-only" style="color:var(--blue);font-size:12px;font-weight:normal;margin-left:8px">${escape(s.host)}</code></td>
       <td class="col-desktop" style="color:var(--blue);font-size:13px"><code>${escape(s.host)}</code></td>
@@ -893,7 +895,7 @@ function renderServers() {
     const label = path.split('/').pop();
     const collapsed = !_expandedGroups.has(path);
     const icon = collapsed ? '▶' : '▼';
-    const padLeft = 16 + depth * 16;
+    const padLeft = indent + depth * indent;
     let html = `<tr class="group-header" data-group="${escape(path)}" style="cursor:pointer;background:#111820;user-select:none">
       <td colspan="7" style="padding:7px 16px 7px ${padLeft}px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px">
         <span style="display:flex;align-items:center;justify-content:space-between">
