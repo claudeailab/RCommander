@@ -25,7 +25,7 @@ Add this to your `docker-compose.yml`:
 
 ```yaml
   rcommander:
-    image: ghcr.io/claudeailab/rcommander:latest
+    image: ghcr.io/claudeailab/rcommander
     container_name: rcommander
     hostname: rcommander
     restart: unless-stopped
