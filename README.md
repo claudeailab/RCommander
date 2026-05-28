@@ -6,18 +6,18 @@ A self-hosted web UI for running commands on remote servers over SSH (Linux/Mac)
 
 ## Features
 
-- **Servers** — add and manage SSH and WinRM hosts with name, host/IP, port, type, and description
-- **Nested folders** — organise servers into folders and sub-folders; edit (rename, move, set credentials) or delete any folder in one place
-- **Folder credentials** — assign a credential to a folder so all servers inside inherit it automatically; servers with their own credential always take priority
-- **Credentials** — store username + password or SSH private key pairs; inherited credentials are shown with a dashed badge on the server list
-- **Commands** — save reusable commands with descriptions; optionally lock a command to a specific server so Execute pre-selects both automatically
-- **Execute** — pick a server (navigating the folder tree) and a command, then run it and watch live streaming output in a built-in terminal
-- **Command search** — the command dropdown on Execute includes a live search filter for long command lists
-- **Unlock** — when a locked command pre-selects a server, a one-click Unlock button resets the selection for ad-hoc use
+- **Servers** — manage SSH and WinRM hosts
+- **Nested folders** — organise servers into folders and sub-folders
+- **Folder credentials** — assign credentials to a folder; all servers inside inherit them
+- **Credentials** — store username/password or SSH private key pairs
+- **Commands** — save reusable commands; optionally lock a command to a specific server
+- **Execute** — pick a server and command, stream live output in a built-in terminal
+- **Command search** — filter the command dropdown as you type
+- **Unlock** — override a locked command's pre-selected server with one click
 - **CSV import** — bulk-import servers from a CSV file
-- **Clone server** — duplicate an existing server entry as a starting point
-- **Responsive UI** — works on desktop and mobile; folder and server rows adapt their layout for small screens
-- **SQLite persistence** — all data stored in a single file under `/data`; easy to back up
+- **Clone server** — duplicate an existing server as a starting point
+- **Responsive** — works on desktop and mobile
+- **SQLite persistence** — single-file database under `/data`
 
 ## Quick Start
 
