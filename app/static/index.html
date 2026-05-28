@@ -211,12 +211,20 @@
   .cmd-select-trigger:hover { border-color: var(--muted); }
   .cmd-select-trigger svg { flex-shrink: 0; color: var(--muted); }
   .cmd-select-menu {
-    display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
     background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-    z-index: 200; max-height: 280px; overflow-y: auto;
+    z-index: 200; max-height: 320px; overflow: hidden;
     box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    flex-direction: column; display: none;
   }
-  .cmd-select-menu.open { display: block; }
+  .cmd-select-menu.open { display: flex; }
+  .cmd-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .cmd-search {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+    padding: 5px 9px; color: var(--text); font-size: 13px; outline: none;
+  }
+  .cmd-search:focus { border-color: var(--blue); }
+  .cmd-select-opts { overflow-y: auto; flex: 1; }
   .cmd-select-opt {
     padding: 8px 12px; cursor: pointer; display: flex; align-items: center;
     gap: 8px; font-size: 13px; color: var(--text);
@@ -1151,7 +1159,6 @@ function _renderCmdSelect(selectedId) {
   if (!menu || !label) return;
   const selCmd = selectedId ? state.commands.find(c => c.id == selectedId) : null;
   const selServer = selCmd?.server_id ? serverMap.get(selCmd.server_id) : null;
-  // Update trigger display
   if (selCmd) {
     label.style.color = '';
     label.innerHTML = escape(selCmd.name) + (selServer
@@ -1161,17 +1168,43 @@ function _renderCmdSelect(selectedId) {
     label.style.color = 'var(--muted)';
     label.textContent = '— select command —';
   }
-  // Render option list
-  menu.innerHTML = `<div class="cmd-select-opt is-placeholder ${!selectedId ? 'is-selected' : ''}" data-value="">— select command —</div>` +
-    state.commands.map(c => {
-      const sv = c.server_id ? serverMap.get(c.server_id) : null;
-      const badge = sv ? `<span class="badge" style="background:#1c3a5e;color:#58a6ff;font-size:10px;padding:1px 6px">${escape(sv.name)}</span>` : '';
-      return `<div class="cmd-select-opt ${c.id == selectedId ? 'is-selected' : ''}" data-value="${c.id}">${escape(c.name)}${badge}</div>`;
-    }).join('');
+  menu.innerHTML =
+    `<div class="cmd-search-wrap"><input class="cmd-search" id="exec-cmd-search" placeholder="Search…" autocomplete="off" oninput="_filterCmdSelect()" onclick="event.stopPropagation()"></div>` +
+    `<div class="cmd-select-opts" id="exec-cmd-opts"></div>`;
+  _filterCmdSelect('', selectedId);
+}
+
+function _filterCmdSelect(query, selectedId) {
+  const serverMap = new Map(state.servers.map(s => [s.id, s]));
+  const input = document.getElementById('exec-cmd-search');
+  const opts  = document.getElementById('exec-cmd-opts');
+  if (!opts) return;
+  const q = (query !== undefined ? query : (input ? input.value : '')).toLowerCase();
+  const sel = selectedId !== undefined ? selectedId : document.getElementById('exec-command').value;
+  const filtered = state.commands.filter(c =>
+    !q || c.name.toLowerCase().includes(q) ||
+    (c.server_id && serverMap.get(c.server_id)?.name.toLowerCase().includes(q))
+  );
+  opts.innerHTML =
+    (!q ? `<div class="cmd-select-opt is-placeholder ${!sel ? 'is-selected' : ''}" data-value="">— select command —</div>` : '') +
+    (filtered.length
+      ? filtered.map(c => {
+          const sv = c.server_id ? serverMap.get(c.server_id) : null;
+          const badge = sv ? `<span class="badge" style="background:#1c3a5e;color:#58a6ff;font-size:10px;padding:1px 6px">${escape(sv.name)}</span>` : '';
+          return `<div class="cmd-select-opt ${c.id == sel ? 'is-selected' : ''}" data-value="${c.id}">${escape(c.name)}${badge}</div>`;
+        }).join('')
+      : `<div class="cmd-select-opt is-placeholder" style="pointer-events:none">No results</div>`
+    );
 }
 
 function toggleCmdSelect() {
-  document.getElementById('exec-cmd-menu').classList.toggle('open');
+  const menu = document.getElementById('exec-cmd-menu');
+  const isOpen = menu.classList.contains('open');
+  menu.classList.toggle('open');
+  if (!isOpen) {
+    const input = document.getElementById('exec-cmd-search');
+    if (input) { input.value = ''; _filterCmdSelect(''); setTimeout(() => input.focus(), 0); }
+  }
 }
 
 function refreshExecuteDropdowns() {
@@ -1208,6 +1241,8 @@ document.getElementById('exec-cmd-menu').addEventListener('click', e => {
   const val = opt.dataset.value || '';
   document.getElementById('exec-command').value = val;
   document.getElementById('exec-cmd-menu').classList.remove('open');
+  const search = document.getElementById('exec-cmd-search');
+  if (search) search.value = '';
   _renderCmdSelect(val);
   onExecCommandChange();
 });
