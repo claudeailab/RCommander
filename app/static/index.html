@@ -577,7 +577,7 @@
             <span class="btn-label">More</span>
           </button>
           <div class="dropdown-menu">
-            <button class="dropdown-item" onclick="closeDropdowns();openNewFolderModal('')">
+            <button class="dropdown-item" onclick="closeDropdowns();openNewFolderModal()">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
               New Folder
             </button>
@@ -966,23 +966,20 @@ function renderServers() {
           <span style="display:flex;align-items:center;gap:8px;min-width:0">
             <span style="margin-right:4px;font-size:10px">${icon}</span>
             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(label)} <span style="font-weight:400">(${countAll(path)})</span></span>
-            ${(() => { const fc = state.folderCredentials.find(f => f.path === path); const fc_cred = fc ? credMap.get(fc.credential_id) : null; return fc_cred ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px;cursor:pointer;flex-shrink:0" onclick="event.stopPropagation();openModal('folder-credential','${escape(path)}')" title="Folder credential — click to change">${escape(fc_cred.name)}</span>` : ''; })()}
+            ${(() => { const fc = state.folderCredentials.find(f => f.path === path); const fc_cred = fc ? credMap.get(fc.credential_id) : null; return fc_cred ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px;flex-shrink:0">${escape(fc_cred.name)}</span>` : ''; })()}
           </span>
           <span style="display:flex;gap:6px;align-items:center">
             <span class="grp-btns-desktop" style="gap:6px">
-              <button class="icon-btn" style="font-size:11px" onclick="event.stopPropagation();openModal('folder-credential','${escape(path)}')" data-action="folder-cred" data-group="${escape(path)}">🔑 Creds</button>
-              <button class="icon-btn" style="font-size:11px" data-action="new-sub" data-group="${escape(path)}">+ Sub</button>
-              <button class="icon-btn" style="font-size:11px" data-action="move" data-group="${escape(path)}">Move</button>
-              <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
+              <button class="icon-btn" style="font-size:11px" data-action="edit-folder" data-group="${escape(path)}">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                Edit
+              </button>
               <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">Delete</button>
             </span>
             <span class="grp-btn-mobile dropdown" id="grp-m-${path.replace(/[^a-zA-Z0-9]/g,'-')}">
               <button class="icon-btn" style="font-size:16px;padding:2px 8px;line-height:1" onclick="event.stopPropagation();toggleDropdown('grp-m-${path.replace(/[^a-zA-Z0-9]/g,'-')}')">⋮</button>
               <div class="dropdown-menu">
-                <button class="dropdown-item" data-action="folder-cred" data-group="${escape(path)}" onclick="openModal('folder-credential','${escape(path)}')">🔑 Set Credentials</button>
-                <button class="dropdown-item" data-action="new-sub" data-group="${escape(path)}">+ Sub-folder</button>
-                <button class="dropdown-item" data-action="move" data-group="${escape(path)}">Move</button>
-                <button class="dropdown-item" data-action="rename" data-group="${escape(path)}">Rename</button>
+                <button class="dropdown-item" data-action="edit-folder" data-group="${escape(path)}">Edit</button>
                 <button class="dropdown-item" style="color:var(--danger-h)" data-action="delete" data-group="${escape(path)}">Delete</button>
               </div>
             </span>
@@ -1014,10 +1011,8 @@ function renderServers() {
     tr.addEventListener('click', e => {
       const btn = e.target.closest('button[data-action]');
       if (btn) {
-        if (btn.dataset.action === 'rename') openRenameGroupModal(btn.dataset.group);
-        else if (btn.dataset.action === 'new-sub') openNewFolderModal(btn.dataset.group);
-        else if (btn.dataset.action === 'move') openMoveGroupModal(btn.dataset.group);
-        else deleteGroup(btn.dataset.group);
+        if (btn.dataset.action === 'edit-folder') openEditFolderModal(btn.dataset.group);
+        else if (btn.dataset.action === 'delete') deleteGroup(btn.dataset.group);
         return;
       }
       toggleGroup(tr.dataset.group);
@@ -1400,25 +1395,6 @@ function openModal(type, id = null, defaultGroup = '') {
       ${modalFooter('saveCredential')}`;
   }
 
-  if (type === 'folder-credential') {
-    const path = id; // id holds the folder path string
-    const fc = state.folderCredentials.find(f => f.path === path);
-    const label = path.split('/').pop();
-    modalBox.innerHTML = `
-      ${modalHeader(`Credentials for "${escape(label)}"`)}
-      <div class="form-group">
-        <label>Credential</label>
-        <select id="f-folder-cred">
-          <option value="">— none (inherit or unset) —</option>
-          ${state.credentials.map(c => `<option value="${c.id}" ${fc?.credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('')}
-        </select>
-        <div class="hint">All servers in this folder will use this credential unless they have one set individually. Sub-folders inherit this too.</div>
-      </div>
-      ${modalFooter('saveFolderCredential')}`;
-    showModal('select');
-    return;
-  }
-
   if (type === 'command') {
     const c = id ? state.commands.find(x => x.id === id) : null;
     const sortedServers = [...state.servers].sort((a, b) => a.name.localeCompare(b.name));
@@ -1521,21 +1497,6 @@ async function saveCommand() {
     description: val('f-desc'), server_id: serverIdVal ? parseInt(serverIdVal) : null };
   if (!body.name || !body.command) { toast('Name and Command are required', 'fail'); return; }
   await saveEntity('commands', 'Command', body);
-}
-
-async function saveFolderCredential() {
-  const path = _editId; // folder path was stored in _editId
-  const credId = document.getElementById('f-folder-cred')?.value;
-  try {
-    if (credId) {
-      await api('PUT', `/api/folder-credentials/${path}`, { credential_id: +credId });
-    } else {
-      await api('DELETE', `/api/folder-credentials/${path}`).catch(() => {});
-    }
-    closeModal();
-    await loadAll();
-    toast('Folder credentials saved', 'ok');
-  } catch(e) { toast(e.message, 'fail'); }
 }
 
 async function del(type, id) {
@@ -1678,26 +1639,55 @@ function toast(msg, type = 'ok') {
 
 // ── Folder actions ────────────────────────────────────────────────────────────
 
-function openNewFolderModal(parentPath) {
-  const title = parentPath ? `New Subfolder in "${parentPath}"` : 'New Folder';
+function _folderDestTree(excludePath, selectedDest) {
+  const prefix = excludePath ? excludePath + '/' : null;
+  const { nodes, roots } = buildFolderNodes();
+  function nodeHTML(path, indent) {
+    if (excludePath && (path === excludePath || path.startsWith(prefix))) return '';
+    const label = path.split('/').pop();
+    const children = [...(nodes[path] || new Set())].filter(c => !excludePath || (c !== excludePath && !c.startsWith(prefix))).sort();
+    const padLeft = 12 + indent * 16;
+    return `<div class="folder-node${path === selectedDest ? ' f-selected' : ''}" data-dest="${escape(path)}" style="padding-left:${padLeft}px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      ${escape(label)}</div>` + children.map(c => nodeHTML(c, indent + 1)).join('');
+  }
+  const validRoots = [...roots].filter(r => !excludePath || (r !== excludePath && !r.startsWith(prefix)));
+  return validRoots.sort().map(r => nodeHTML(r, 0)).join('');
+}
+
+function openNewFolderModal() {
+  let parentValue = '';
   modalBox.innerHTML = `
-    ${modalHeader(title)}
+    ${modalHeader('New Folder')}
     <div class="form-group">
       <label>Folder Name</label>
       <input id="f-new-folder-name" placeholder="Folder name">
     </div>
+    <div class="form-group">
+      <label>Parent Folder <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+      <div class="folder-tree" id="f-new-folder-tree" style="max-height:180px">
+        <div class="folder-node f-selected" data-dest="" style="padding-left:12px">(root level)</div>
+        ${_folderDestTree('', '')}
+      </div>
+    </div>
     ${modalFooter('_saveNewFolder')}`;
-  const inp = modalBox.querySelector('#f-new-folder-name');
-  inp.dataset.parent = parentPath;
-  inp.addEventListener('keydown', e => { if (e.key === 'Enter') _saveNewFolder(); });
+  const tree = modalBox.querySelector('#f-new-folder-tree');
+  tree.addEventListener('click', e => {
+    const node = e.target.closest('[data-dest]');
+    if (!node) return;
+    parentValue = node.dataset.dest;
+    tree.querySelectorAll('.folder-node').forEach(n => n.classList.remove('f-selected'));
+    node.classList.add('f-selected');
+  });
+  modalBox.querySelector('#f-new-folder-name').addEventListener('keydown', e => { if (e.key === 'Enter') _saveNewFolder(); });
+  modalBox._getParent = () => parentValue;
   showModal('#f-new-folder-name');
 }
 
 async function _saveNewFolder() {
-  const input = document.getElementById('f-new-folder-name');
-  const name = input?.value?.trim();
+  const name = document.getElementById('f-new-folder-name')?.value?.trim();
   if (!name) { toast('Name cannot be empty', 'fail'); return; }
-  const parent = input.dataset.parent;
+  const parent = modalBox._getParent?.() ?? '';
   const path = parent ? parent + '/' + name : name;
   try {
     await api('POST', '/api/groups', { path });
@@ -1705,98 +1695,67 @@ async function _saveNewFolder() {
   } catch(e) { toast(e.message, 'fail'); }
 }
 
-
-
-function openRenameGroupModal(fullPath) {
+function openEditFolderModal(fullPath) {
   const parts = fullPath.split('/');
-  const label = parts.pop();
+  const leafName = parts.pop();
   const parentPath = parts.join('/');
+  const fc = state.folderCredentials.find(f => f.path === fullPath);
+  let destValue = parentPath;
+
   modalBox.innerHTML = `
-    ${modalHeader('Rename Folder')}
-    ${parentPath ? `<div class="hint" style="margin-bottom:4px">Inside: ${escape(parentPath)}</div>` : ''}
+    ${modalHeader(`Edit Folder`)}
     <div class="form-group">
-      <label>New Name</label>
-      <input id="f-group-name" value="${escape(label)}" placeholder="Folder name">
+      <label>Name</label>
+      <input id="f-folder-name" value="${escape(leafName)}" placeholder="Folder name">
     </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="f-rename-confirm">Rename</button>
-    </div>`;
-  document.getElementById('f-rename-confirm').addEventListener('click', () => {
-    const newLabel = document.getElementById('f-group-name')?.value?.trim();
-    if (!newLabel) { toast('Name cannot be empty', 'fail'); return; }
-    const newPath = parentPath ? parentPath + '/' + newLabel : newLabel;
-    api('PUT', '/api/groups/rename', { old_name: fullPath, new_name: newPath })
-      .then(() => { closeModal(); loadAll(); toast('Folder renamed'); })
-      .catch(e => toast(e.message, 'fail'));
-  });
-  overlay.classList.remove('hidden');
-  setTimeout(() => document.getElementById('f-group-name')?.select(), 50);
-}
-
-function openMoveGroupModal(fullPath) {
-  const leafName = fullPath.split('/').pop();
-  // Build list of valid destination folders: all groups except the folder itself and its descendants
-  const prefix = fullPath + '/';
-  const destinations = state.groups.filter(g => g !== fullPath && !g.startsWith(prefix));
-
-  let destValue = '';
-  const renderTree = () => {
-    const { nodes, roots } = buildFolderNodes();
-    // Filter out the folder being moved and its children from the picker
-    const validRoots = [...roots].filter(r => r !== fullPath && !r.startsWith(prefix));
-
-    function nodeHTML(path, indent) {
-      if (path === fullPath || path.startsWith(prefix)) return '';
-      const label = path.split('/').pop();
-      const selected = path === destValue;
-      const children = [...(nodes[path] || new Set())].filter(c => c !== fullPath && !c.startsWith(prefix)).sort();
-      const padLeft = 12 + indent * 16;
-      let h = `<div class="folder-node${selected ? ' f-selected' : ''}" data-dest="${escape(path)}" style="padding-left:${padLeft}px">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-        ${escape(label)}
-      </div>`;
-      for (const child of children) h += nodeHTML(child, indent + 1);
-      return h;
-    }
-    return validRoots.map(r => nodeHTML(r, 0)).join('');
-  };
-
-  modalBox.innerHTML = `
-    ${modalHeader(`Move "${escape(leafName)}" into…`)}
-    <div class="hint" style="margin-bottom:4px">Select a destination folder, or leave unselected to move to root level.</div>
-    <div class="folder-tree" id="move-dest-tree" style="max-height:260px">
-      <div class="folder-node f-selected" data-dest="" style="padding-left:12px">(root level)</div>
-      ${renderTree()}
+    <div class="form-group">
+      <label>Parent Folder</label>
+      <div class="folder-tree" id="f-edit-folder-tree" style="max-height:180px">
+        <div class="folder-node${!parentPath ? ' f-selected' : ''}" data-dest="" style="padding-left:12px">(root level)</div>
+        ${_folderDestTree(fullPath, parentPath)}
+      </div>
     </div>
-    <div class="hint" id="move-dest-hint">Destination: root level</div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="move-confirm-btn">Move</button>
-    </div>`;
+    <div class="form-group">
+      <label>Credential</label>
+      <select id="f-folder-cred">
+        <option value="">— none —</option>
+        ${state.credentials.map(c => `<option value="${c.id}" ${fc?.credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('')}
+      </select>
+      <div class="hint">All servers in this folder inherit this credential unless they have their own.</div>
+    </div>
+    ${modalFooter('_saveEditFolder')}`;
 
-  const tree = modalBox.querySelector('#move-dest-tree');
-  const hint = modalBox.querySelector('#move-dest-hint');
-
+  const tree = modalBox.querySelector('#f-edit-folder-tree');
   tree.addEventListener('click', e => {
     const node = e.target.closest('[data-dest]');
     if (!node) return;
     destValue = node.dataset.dest;
     tree.querySelectorAll('.folder-node').forEach(n => n.classList.remove('f-selected'));
     node.classList.add('f-selected');
-    hint.textContent = destValue ? `Destination: ${destValue}` : 'Destination: root level';
   });
+  modalBox._editFolderState = () => ({ fullPath, leafName, destValue: () => destValue });
+  showModal('#f-folder-name');
+  document.getElementById('f-folder-name').select();
+}
 
-  modalBox.querySelector('#move-confirm-btn').addEventListener('click', async () => {
-    const newPath = destValue ? destValue + '/' + leafName : leafName;
-    if (newPath === fullPath) { closeModal(); return; }
-    try {
+async function _saveEditFolder() {
+  const { fullPath, leafName: oldLeaf, destValue: getDest } = modalBox._editFolderState();
+  const newLeaf = document.getElementById('f-folder-name')?.value?.trim();
+  if (!newLeaf) { toast('Name cannot be empty', 'fail'); return; }
+  const newParent = getDest();
+  const newPath = newParent ? newParent + '/' + newLeaf : newLeaf;
+  const credId = document.getElementById('f-folder-cred')?.value;
+  try {
+    if (newPath !== fullPath) {
       await api('PUT', '/api/groups/rename', { old_name: fullPath, new_name: newPath });
-      closeModal(); await loadAll(); toast('Folder moved');
-    } catch(e) { toast(e.message, 'fail'); }
-  });
-
-  overlay.classList.remove('hidden');
+    }
+    if (credId) {
+      await api('PUT', `/api/folder-credentials/${newPath}`, { credential_id: +credId });
+    } else {
+      await api('DELETE', `/api/folder-credentials/${newPath}`).catch(() => {});
+    }
+    closeModal(); await loadAll(); toast('Folder saved');
+  } catch(e) { toast(e.message, 'fail'); }
 }
 
 async function deleteGroup(path) {
