@@ -738,7 +738,7 @@
 <div class="toast-container" id="toasts"></div>
 
 <script>
-const state = { servers: [], credentials: [], commands: [], groups: [] };
+const state = { servers: [], credentials: [], commands: [], groups: [], folderCredentials: [] };
 
 const overlay  = document.getElementById('overlay');
 const modalBox = document.getElementById('modal-box');
@@ -760,16 +760,18 @@ async function api(method, path, body) {
 }
 
 async function loadAll() {
-  const [servers, credentials, commands, groups] = await Promise.all([
+  const [servers, credentials, commands, groups, folderCredentials] = await Promise.all([
     api('GET', '/api/servers'),
     api('GET', '/api/credentials'),
     api('GET', '/api/commands'),
     api('GET', '/api/groups'),
+    api('GET', '/api/folder-credentials'),
   ]);
-  state.servers     = servers;
-  state.credentials = credentials;
-  state.commands    = commands;
-  state.groups      = groups;
+  state.servers           = servers;
+  state.credentials       = credentials;
+  state.commands          = commands;
+  state.groups            = groups;
+  state.folderCredentials = folderCredentials;
   renderServers();
   renderCredentials();
   renderCommands();
@@ -857,6 +859,17 @@ function _pickerNodeHTML(nodes, path, selectedPath, indent) {
 
 const _expandedGroups = new Set();
 
+function getEffectiveCredential(server) {
+  if (server.credential_id) return { id: server.credential_id, inherited: false };
+  const parts = (server.server_group || '').split('/').filter(Boolean);
+  for (let i = parts.length; i > 0; i--) {
+    const path = parts.slice(0, i).join('/');
+    const fc = state.folderCredentials.find(f => f.path === path);
+    if (fc?.credential_id) return { id: fc.credential_id, inherited: true, from: path };
+  }
+  return null;
+}
+
 function renderServers() {
   const tbody = document.getElementById('servers-body');
   const q = (document.getElementById('server-filter')?.value ?? '').toLowerCase();
@@ -902,14 +915,20 @@ function renderServers() {
   const indent = window.innerWidth <= 768 ? 8 : 16;
 
   const serverRow = (s, depth = 0) => {
-    const cred = credMap.get(s.credential_id);
+    const eff = getEffectiveCredential(s);
+    const effCred = eff ? credMap.get(eff.id) : null;
+    const credCell = effCred
+      ? (eff.inherited
+          ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px;opacity:.7;border-style:dashed" title="Inherited from folder: ${escape(eff.from)}">${escape(effCred.name)} ↑</span>`
+          : `<span class="badge badge-key" style="font-size:10px;padding:1px 5px">${escape(effCred.name)}</span>`)
+      : '<span style="color:var(--muted);font-size:12px">—</span>';
     const nameStyle = depth > 0 ? ` style="padding-left:${indent + depth * indent}px"` : '';
     return `<tr>
       <td class="m-name"${nameStyle}><strong>${escape(s.name)}</strong><code class="m-only" style="color:var(--blue);font-size:12px;font-weight:normal;margin-left:8px">${escape(s.host)}</code></td>
       <td class="col-desktop" style="color:var(--blue);font-size:13px"><code>${escape(s.host)}</code></td>
       <td class="col-desktop" style="color:var(--muted);font-size:12px">${escape(s.port)}</td>
       <td class="col-desktop"><span class="badge badge-${s.type}" style="font-size:10px;padding:1px 5px">${s.type.toUpperCase()}</span></td>
-      <td class="col-desktop">${cred ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px">${escape(cred.name)}</span>` : '<span style="color:var(--muted);font-size:12px">—</span>'}</td>
+      <td class="col-desktop">${credCell}</td>
       <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
       <td class="m-actions">
         <div class="actions">
@@ -944,12 +963,14 @@ function renderServers() {
     let html = `<tr class="group-header" data-group="${escape(path)}" style="cursor:pointer;background:#111820;user-select:none">
       <td colspan="7" style="padding:7px 16px 7px ${padLeft}px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px">
         <span style="display:flex;align-items:center;justify-content:space-between">
-          <span>
-            <span style="margin-right:8px;font-size:10px">${icon}</span>
-            ${escape(label)} <span style="font-weight:400;margin-left:6px">(${countAll(path)})</span>
+          <span style="display:flex;align-items:center;gap:8px;min-width:0">
+            <span style="margin-right:4px;font-size:10px">${icon}</span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(label)} <span style="font-weight:400">(${countAll(path)})</span></span>
+            ${(() => { const fc = state.folderCredentials.find(f => f.path === path); const fc_cred = fc ? credMap.get(fc.credential_id) : null; return fc_cred ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px;cursor:pointer;flex-shrink:0" onclick="event.stopPropagation();openModal('folder-credential','${escape(path)}')" title="Folder credential — click to change">${escape(fc_cred.name)}</span>` : ''; })()}
           </span>
           <span style="display:flex;gap:6px;align-items:center">
             <span class="grp-btns-desktop" style="gap:6px">
+              <button class="icon-btn" style="font-size:11px" onclick="event.stopPropagation();openModal('folder-credential','${escape(path)}')" data-action="folder-cred" data-group="${escape(path)}">🔑 Creds</button>
               <button class="icon-btn" style="font-size:11px" data-action="new-sub" data-group="${escape(path)}">+ Sub</button>
               <button class="icon-btn" style="font-size:11px" data-action="move" data-group="${escape(path)}">Move</button>
               <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
@@ -958,6 +979,7 @@ function renderServers() {
             <span class="grp-btn-mobile dropdown" id="grp-m-${path.replace(/[^a-zA-Z0-9]/g,'-')}">
               <button class="icon-btn" style="font-size:16px;padding:2px 8px;line-height:1" onclick="event.stopPropagation();toggleDropdown('grp-m-${path.replace(/[^a-zA-Z0-9]/g,'-')}')">⋮</button>
               <div class="dropdown-menu">
+                <button class="dropdown-item" data-action="folder-cred" data-group="${escape(path)}" onclick="openModal('folder-credential','${escape(path)}')">🔑 Set Credentials</button>
                 <button class="dropdown-item" data-action="new-sub" data-group="${escape(path)}">+ Sub-folder</button>
                 <button class="dropdown-item" data-action="move" data-group="${escape(path)}">Move</button>
                 <button class="dropdown-item" data-action="rename" data-group="${escape(path)}">Rename</button>
@@ -1378,6 +1400,25 @@ function openModal(type, id = null, defaultGroup = '') {
       ${modalFooter('saveCredential')}`;
   }
 
+  if (type === 'folder-credential') {
+    const path = id; // id holds the folder path string
+    const fc = state.folderCredentials.find(f => f.path === path);
+    const label = path.split('/').pop();
+    modalBox.innerHTML = `
+      ${modalHeader(`Credentials for "${escape(label)}"`)}
+      <div class="form-group">
+        <label>Credential</label>
+        <select id="f-folder-cred">
+          <option value="">— none (inherit or unset) —</option>
+          ${state.credentials.map(c => `<option value="${c.id}" ${fc?.credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('')}
+        </select>
+        <div class="hint">All servers in this folder will use this credential unless they have one set individually. Sub-folders inherit this too.</div>
+      </div>
+      ${modalFooter('saveFolderCredential')}`;
+    showModal('select');
+    return;
+  }
+
   if (type === 'command') {
     const c = id ? state.commands.find(x => x.id === id) : null;
     const sortedServers = [...state.servers].sort((a, b) => a.name.localeCompare(b.name));
@@ -1482,6 +1523,21 @@ async function saveCommand() {
   await saveEntity('commands', 'Command', body);
 }
 
+async function saveFolderCredential() {
+  const path = _editId; // folder path was stored in _editId
+  const credId = document.getElementById('f-folder-cred')?.value;
+  try {
+    if (credId) {
+      await api('PUT', `/api/folder-credentials/${path}`, { credential_id: +credId });
+    } else {
+      await api('DELETE', `/api/folder-credentials/${path}`).catch(() => {});
+    }
+    closeModal();
+    await loadAll();
+    toast('Folder credentials saved', 'ok');
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
 async function del(type, id) {
   const map = { server: ['servers', 'Server'], credential: ['credentials', 'Credential'], command: ['commands', 'Command'] };
   const [resource, label] = map[type];
@@ -1540,8 +1596,9 @@ async function runCommand() {
   if (!serverId || !cmdId) { toast('Select server and command', 'fail'); return; }
 
   const server = state.servers.find(s => s.id == serverId);
-  const credId = server?.credential_id;
-  if (!credId) { toast('Server has no credentials configured', 'fail'); return; }
+  const effCred = server ? getEffectiveCredential(server) : null;
+  const credId = effCred?.id;
+  if (!credId) { toast('No credentials configured for this server or its folder', 'fail'); return; }
   const cmd = state.commands.find(c => c.id == cmdId);
 
   _term = document.getElementById('terminal');

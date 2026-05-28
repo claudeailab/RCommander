@@ -59,6 +59,13 @@ class GroupRow(Base):
     path = Column(String, unique=True, nullable=False)
 
 
+class FolderCredentialRow(Base):
+    __tablename__ = "folder_credentials"
+    id = Column(Integer, primary_key=True, index=True)
+    path = Column(String, unique=True, nullable=False)
+    credential_id = Column(Integer, nullable=False)
+
+
 Base.metadata.create_all(engine)
 
 
@@ -127,6 +134,10 @@ class ImportResult(BaseModel):
 
 class GroupIn(BaseModel):
     path: str
+
+
+class FolderCredentialIn(BaseModel):
+    credential_id: int
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -339,6 +350,11 @@ def rename_group(data: GroupRename):
         db.query(GroupRow).filter(GroupRow.path == old).update({GroupRow.path: new})
         for row in db.query(GroupRow).filter(GroupRow.path.like(prefix + "%")).all():
             row.path = new + "/" + row.path[len(prefix):]
+        db.query(FolderCredentialRow).filter(FolderCredentialRow.path == old).update(
+            {FolderCredentialRow.path: new}
+        )
+        for row in db.query(FolderCredentialRow).filter(FolderCredentialRow.path.like(prefix + "%")).all():
+            row.path = new + "/" + row.path[len(prefix):]
         db.commit()
     return {"ok": True}
 
@@ -354,6 +370,38 @@ def delete_group(name: str):
             or_(GroupRow.path == name,
                 GroupRow.path.like(name + "/%"))
         ).delete(synchronize_session="fetch")
+        db.query(FolderCredentialRow).filter(
+            or_(FolderCredentialRow.path == name,
+                FolderCredentialRow.path.like(name + "/%"))
+        ).delete(synchronize_session="fetch")
+        db.commit()
+
+
+# ── Folder Credentials ────────────────────────────────────────────────────────
+
+@app.get("/api/folder-credentials")
+def list_folder_credentials():
+    with Session() as db:
+        return [{"path": r.path, "credential_id": r.credential_id}
+                for r in db.query(FolderCredentialRow).all()]
+
+
+@app.put("/api/folder-credentials/{path:path}", status_code=200)
+def set_folder_credential(path: str, data: FolderCredentialIn):
+    with Session() as db:
+        row = db.query(FolderCredentialRow).filter_by(path=path).first()
+        if row:
+            row.credential_id = data.credential_id
+        else:
+            db.add(FolderCredentialRow(path=path, credential_id=data.credential_id))
+        db.commit()
+    return {"path": path, "credential_id": data.credential_id}
+
+
+@app.delete("/api/folder-credentials/{path:path}", status_code=204)
+def delete_folder_credential(path: str):
+    with Session() as db:
+        db.query(FolderCredentialRow).filter_by(path=path).delete()
         db.commit()
 
 
