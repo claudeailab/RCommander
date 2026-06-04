@@ -440,6 +440,21 @@
   }
   .server-locked-note.visible { display: block; }
   select:disabled, select[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+  /* ── Bulk Execute ── */
+  .bulk-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .bulk-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .bulk-tree { height: 340px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; margin-top: 8px; background: var(--bg); }
+  .bulk-item { display: flex; align-items: center; gap: 7px; padding: 5px 10px; font-size: 13px; user-select: none; }
+  .bulk-item:hover { background: #1a2030; }
+  .bulk-item input[type=checkbox] { cursor: pointer; accent-color: var(--accent-h); flex-shrink: 0; }
+  .bulk-result-row { border-bottom: 1px solid var(--border); }
+  .bulk-result-hdr { display: flex; align-items: center; gap: 10px; padding: 8px 16px; cursor: pointer; font-size: 13px; }
+  .bulk-result-hdr:hover { background: #1a2030; }
+  .bulk-result-out { display: none; padding: 8px 16px; background: var(--bg); font-family: monospace; font-size: 11px; max-height: 160px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+  .bulk-result-out.open { display: block; }
+  @media (max-width: 768px) { .bulk-layout { grid-template-columns: 1fr; } }
+
   /* ── Dropdown menu ── */
   .dropdown { position: relative; }
   .dropdown-menu {
@@ -496,7 +511,11 @@
     </div>
     <div class="nav-item" data-tab="execute">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-      <span class="nav-label">Execute</span>
+      <span class="nav-label">Execute (Single)</span>
+    </div>
+    <div class="nav-item" data-tab="bulk-execute">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="3" y1="21" x2="21" y2="21"/></svg>
+      <span class="nav-label">Execute (Bulk)</span>
     </div>
   </nav>
 </div>
@@ -518,7 +537,11 @@
     </div>
     <div class="mobile-nav-item" data-tab="execute">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-      Execute
+      Single
+    </div>
+    <div class="mobile-nav-item" data-tab="bulk-execute">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="3" y1="21" x2="21" y2="21"/></svg>
+      Bulk
     </div>
   </div>
 </div>
@@ -638,7 +661,7 @@
   <!-- EXECUTE -->
   <div id="tab-execute" style="display:none">
     <div class="topbar">
-      <span class="page-title">Execute</span>
+      <span class="page-title">Execute (Single)</span>
     </div>
     <div class="content">
       <div class="execute-layout">
@@ -671,6 +694,59 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- BULK EXECUTE -->
+  <div id="tab-bulk-execute" style="display:none">
+    <div class="topbar">
+      <span class="page-title">Execute (Bulk)</span>
+    </div>
+    <div class="content">
+      <div class="bulk-layout">
+        <!-- Left panel: server selector -->
+        <div class="bulk-panel">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+            <h3 style="margin:0">SERVERS</h3>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-ghost" onclick="bulkSelectAll()" style="font-size:12px;padding:3px 10px">All</button>
+              <button class="btn btn-ghost" onclick="bulkClearAll()" style="font-size:12px;padding:3px 10px">Clear</button>
+            </div>
+          </div>
+          <div style="margin:8px 0 6px">
+            <input id="bulk-server-search" type="text" placeholder="Filter servers…" oninput="renderBulkTree()"
+              style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--fg);font-size:13px;box-sizing:border-box">
+          </div>
+          <div class="bulk-tree" id="bulk-tree"></div>
+          <div id="bulk-selection-count" style="margin-top:6px;font-size:12px;color:var(--muted)">0 servers selected</div>
+        </div>
+        <!-- Right panel: command + run -->
+        <div class="bulk-panel" style="display:flex;flex-direction:column;gap:12px">
+          <div>
+            <h3>COMMAND</h3>
+            <input type="hidden" id="bulk-command" value="">
+            <div class="cmd-select" id="bulk-cmd-custom">
+              <div class="cmd-select-trigger" onclick="toggleBulkCmdSelect()">
+                <span id="bulk-cmd-label" style="color:var(--muted)">— select command —</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="cmd-select-menu" id="bulk-cmd-menu"></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-run" id="bulk-run-btn" onclick="runBulk()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run on Selected
+            </button>
+            <button class="btn btn-ghost" id="bulk-stop-btn" onclick="stopBulk()" style="display:none">
+              Stop
+            </button>
+          </div>
+          <div id="bulk-progress" style="display:none;font-size:12px;color:var(--muted)"></div>
+        </div>
+      </div>
+      <!-- Results -->
+      <div id="bulk-results" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:none"></div>
     </div>
   </div>
 </main>
@@ -722,6 +798,8 @@ async function loadAll() {
   renderCredentials();
   renderCommands();
   refreshExecuteDropdowns();
+  renderBulkTree();
+  refreshBulkCmdDropdown();
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -1766,6 +1844,357 @@ async function runImport() {
     btn.disabled = false;
     btn.textContent = 'Import';
   }
+}
+
+// ── Bulk Execute ──────────────────────────────────────────────────────────────
+
+const _bulkExpanded = new Set();
+let _bulkSelected = new Set();
+let _bulkAbort = false;
+let _bulkRunning = false;
+
+function renderBulkTree() {
+  const query = (document.getElementById('bulk-server-search')?.value || '').toLowerCase().trim();
+  const container = document.getElementById('bulk-tree');
+  if (!container) return;
+
+  // Build flat list of matching servers
+  const servers = query
+    ? state.servers.filter(s => s.name.toLowerCase().includes(query) ||
+        (s.host || '').toLowerCase().includes(query) ||
+        (s.server_group || '').toLowerCase().includes(query))
+    : state.servers;
+
+  if (query) {
+    // Flat list when searching
+    container.innerHTML = servers.map(s => {
+      const checked = _bulkSelected.has(s.id);
+      return `<div class="bulk-item" style="padding-left:10px">
+        <input type="checkbox" data-bulk-server="${s.id}" ${checked ? 'checked' : ''} onchange="bulkServerCheck(${s.id},this.checked)">
+        <span>${escape(s.name)}</span>
+        <span style="color:var(--muted);font-size:11px">${escape(s.host || '')}</span>
+      </div>`;
+    }).join('');
+    _updateBulkCount();
+    return;
+  }
+
+  // Build group tree
+  const groups = {};
+  servers.forEach(s => {
+    const g = s.server_group || '';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(s);
+  });
+
+  // Collect all unique folder paths (including intermediate ones)
+  const allPaths = new Set();
+  Object.keys(groups).forEach(g => {
+    if (!g) return;
+    const parts = g.split('/');
+    for (let i = 1; i <= parts.length; i++) allPaths.add(parts.slice(0, i).join('/'));
+  });
+
+  const rootFolders = [...allPaths].filter(p => !p.includes('/'));
+  const rootServers = groups[''] || [];
+
+  function renderFolder(path) {
+    const depth = path.split('/').length;
+    const name = path.split('/').pop();
+    const expanded = _bulkExpanded.has(path);
+    const childPaths = [...allPaths].filter(p => {
+      const parts = p.split('/');
+      return parts.length === depth + 1 && p.startsWith(path + '/');
+    });
+    const directServers = groups[path] || [];
+
+    // Determine checkbox state
+    const allInside = _bulkGetAllServersUnder(path, groups, allPaths);
+    const checkedCount = allInside.filter(id => _bulkSelected.has(id)).length;
+    const isChecked = allInside.length > 0 && checkedCount === allInside.length;
+    const isIndeterminate = checkedCount > 0 && checkedCount < allInside.length;
+
+    let html = `<div class="bulk-item" style="padding-left:${(depth - 1) * 16 + 10}px">
+      <input type="checkbox" data-bulk-folder="${escape(path)}"
+        ${isChecked ? 'checked' : ''}
+        data-indeterminate="${isIndeterminate}"
+        onchange="bulkFolderCheck('${escape(path)}',this.checked)">
+      <span onclick="bulkToggleFolderExpand('${escape(path)}')" style="cursor:pointer;display:flex;align-items:center;gap:4px;font-weight:500">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;transform:${expanded ? 'rotate(90deg)' : ''}">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+        ${escape(name)}
+        <span style="color:var(--muted);font-size:11px;font-weight:400">(${allInside.length})</span>
+      </span>
+    </div>`;
+
+    if (expanded) {
+      childPaths.sort().forEach(cp => { html += renderFolder(cp); });
+      directServers.forEach(s => {
+        const checked = _bulkSelected.has(s.id);
+        html += `<div class="bulk-item" style="padding-left:${depth * 16 + 10}px">
+          <input type="checkbox" data-bulk-server="${s.id}" ${checked ? 'checked' : ''} onchange="bulkServerCheck(${s.id},this.checked)">
+          <span>${escape(s.name)}</span>
+          <span style="color:var(--muted);font-size:11px">${escape(s.host || '')}</span>
+        </div>`;
+      });
+    }
+    return html;
+  }
+
+  let html = '';
+  rootFolders.sort().forEach(p => { html += renderFolder(p); });
+  rootServers.forEach(s => {
+    const checked = _bulkSelected.has(s.id);
+    html += `<div class="bulk-item" style="padding-left:10px">
+      <input type="checkbox" data-bulk-server="${s.id}" ${checked ? 'checked' : ''} onchange="bulkServerCheck(${s.id},this.checked)">
+      <span>${escape(s.name)}</span>
+      <span style="color:var(--muted);font-size:11px">${escape(s.host || '')}</span>
+    </div>`;
+  });
+  container.innerHTML = html;
+
+  // Apply indeterminate states
+  container.querySelectorAll('input[data-indeterminate="true"]').forEach(cb => { cb.indeterminate = true; });
+  _updateBulkCount();
+}
+
+function _bulkGetAllServersUnder(path, groups, allPaths) {
+  const ids = [];
+  const prefix = path + '/';
+  Object.keys(groups).forEach(g => {
+    if (g === path || g.startsWith(prefix)) {
+      groups[g].forEach(s => ids.push(s.id));
+    }
+  });
+  return ids;
+}
+
+function bulkToggleFolderExpand(path) {
+  if (_bulkExpanded.has(path)) _bulkExpanded.delete(path);
+  else _bulkExpanded.add(path);
+  renderBulkTree();
+}
+
+function bulkFolderCheck(path, checked) {
+  const groups = {};
+  state.servers.forEach(s => {
+    const g = s.server_group || '';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(s);
+  });
+  const allPaths = new Set();
+  state.servers.forEach(s => {
+    const g = s.server_group || '';
+    if (!g) return;
+    const parts = g.split('/');
+    for (let i = 1; i <= parts.length; i++) allPaths.add(parts.slice(0, i).join('/'));
+  });
+  const ids = _bulkGetAllServersUnder(path, groups, allPaths);
+  ids.forEach(id => { if (checked) _bulkSelected.add(id); else _bulkSelected.delete(id); });
+  renderBulkTree();
+}
+
+function bulkServerCheck(id, checked) {
+  if (checked) _bulkSelected.add(id);
+  else _bulkSelected.delete(id);
+  renderBulkTree();
+}
+
+function bulkSelectAll() {
+  state.servers.forEach(s => _bulkSelected.add(s.id));
+  renderBulkTree();
+}
+
+function bulkClearAll() {
+  _bulkSelected.clear();
+  renderBulkTree();
+}
+
+function _updateBulkCount() {
+  const el = document.getElementById('bulk-selection-count');
+  if (el) el.textContent = `${_bulkSelected.size} server${_bulkSelected.size !== 1 ? 's' : ''} selected`;
+}
+
+function _renderBulkCmdSelect(selectedId) {
+  const menu = document.getElementById('bulk-cmd-menu');
+  if (!menu) return;
+  const query = (menu.querySelector('#bulk-cmd-search')?.value || '').toLowerCase();
+  const filtered = state.commands.filter(c =>
+    !query || c.name.toLowerCase().includes(query) ||
+    (c.server_id && state.servers.find(s => s.id === c.server_id)?.name.toLowerCase().includes(query))
+  );
+  menu.innerHTML = `
+    <div class="cmd-search-wrap">
+      <input id="bulk-cmd-search" class="cmd-search" type="text" placeholder="Search commands…"
+        oninput="_renderBulkCmdSelect('${selectedId}')" onclick="event.stopPropagation()" autocomplete="off">
+    </div>
+    <div class="cmd-select-opts" id="bulk-cmd-opts">
+      <div class="cmd-select-opt${!selectedId ? ' selected' : ''}" data-value="">
+        <span style="color:var(--muted)">— select command —</span>
+      </div>
+      ${filtered.map(c => {
+        const srv = c.server_id ? state.servers.find(s => s.id === c.server_id) : null;
+        return `<div class="cmd-select-opt${c.id == selectedId ? ' selected' : ''}" data-value="${c.id}">
+          ${escape(c.name)}${srv ? ` <span style="font-size:10px;color:var(--muted);margin-left:4px">→ ${escape(srv.name)}</span>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function toggleBulkCmdSelect() {
+  const menu = document.getElementById('bulk-cmd-menu');
+  const isOpen = menu.classList.contains('open');
+  document.querySelectorAll('.cmd-select-menu.open').forEach(m => m.classList.remove('open'));
+  if (!isOpen) {
+    const selectedId = document.getElementById('bulk-command').value;
+    _renderBulkCmdSelect(selectedId);
+    menu.classList.add('open');
+    setTimeout(() => menu.querySelector('#bulk-cmd-search')?.focus(), 50);
+  }
+}
+
+document.getElementById('bulk-cmd-menu').addEventListener('click', e => {
+  const opt = e.target.closest('.cmd-select-opt');
+  if (!opt) return;
+  const val = opt.dataset.value || '';
+  document.getElementById('bulk-command').value = val;
+  document.getElementById('bulk-cmd-menu').classList.remove('open');
+  const label = document.getElementById('bulk-cmd-label');
+  const cmd = state.commands.find(c => c.id == val);
+  if (label) {
+    if (cmd) { label.textContent = cmd.name; label.style.color = ''; }
+    else { label.textContent = '— select command —'; label.style.color = 'var(--muted)'; }
+  }
+  _renderBulkCmdSelect(val);
+});
+
+function refreshBulkCmdDropdown() {
+  const val = document.getElementById('bulk-command')?.value || '';
+  const label = document.getElementById('bulk-cmd-label');
+  if (!label) return;
+  const cmd = state.commands.find(c => c.id == val);
+  if (cmd) { label.textContent = cmd.name; label.style.color = ''; }
+  else { label.textContent = '— select command —'; label.style.color = 'var(--muted)'; }
+  _renderBulkCmdSelect(val);
+}
+
+async function runBulk() {
+  const cmdId = document.getElementById('bulk-command').value;
+  if (!cmdId) { toast('Select a command first', 'fail'); return; }
+  const cmd = state.commands.find(c => c.id == cmdId);
+  if (!cmd) return;
+  const serverIds = [..._bulkSelected];
+  if (!serverIds.length) { toast('Select at least one server', 'fail'); return; }
+
+  _bulkAbort = false;
+  _bulkRunning = true;
+  document.getElementById('bulk-run-btn').disabled = true;
+  document.getElementById('bulk-stop-btn').style.display = '';
+
+  const results = document.getElementById('bulk-results');
+  results.style.display = '';
+  results.innerHTML = '';
+  serverIds.forEach(id => {
+    const s = state.servers.find(x => x.id === id);
+    if (!s) return;
+    results.innerHTML += `<div class="bulk-result-row" id="bulk-row-${id}">
+      <div class="bulk-result-hdr" onclick="bulkToggleResult(${id})">
+        <span id="bulk-status-${id}" style="font-size:11px;width:60px;flex-shrink:0;color:var(--muted)">Queued</span>
+        <span style="font-weight:500">${escape(s.name)}</span>
+        <span style="color:var(--muted);font-size:11px">${escape(s.host || '')}</span>
+      </div>
+      <div class="bulk-result-out" id="bulk-out-${id}"></div>
+    </div>`;
+  });
+
+  // Progress counter
+  let done = 0;
+  const total = serverIds.length;
+  const progress = document.getElementById('bulk-progress');
+  progress.style.display = '';
+  const updateProgress = () => { progress.textContent = `${done} / ${total} complete`; };
+  updateProgress();
+
+  // Concurrency-limited queue (max 10 parallel)
+  const CONCURRENCY = 10;
+  let idx = 0;
+
+  async function worker() {
+    while (idx < serverIds.length && !_bulkAbort) {
+      const id = serverIds[idx++];
+      const s = state.servers.find(x => x.id === id);
+      if (!s) { done++; updateProgress(); continue; }
+      const statusEl = document.getElementById(`bulk-status-${id}`);
+      const outEl = document.getElementById(`bulk-out-${id}`);
+      if (statusEl) { statusEl.textContent = 'Running…'; statusEl.style.color = 'var(--accent-h)'; }
+      try {
+        await runBulkServer(s, cmd, outEl);
+        if (statusEl) { statusEl.textContent = 'Done'; statusEl.style.color = 'var(--accent-h)'; }
+      } catch(e) {
+        if (outEl) outEl.textContent += '\n[Error] ' + e.message;
+        if (statusEl) { statusEl.textContent = 'Error'; statusEl.style.color = 'var(--warn)'; }
+      }
+      done++;
+      updateProgress();
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(CONCURRENCY, serverIds.length) }, () => worker());
+  await Promise.all(workers);
+
+  _bulkRunning = false;
+  document.getElementById('bulk-run-btn').disabled = false;
+  document.getElementById('bulk-stop-btn').style.display = 'none';
+  if (_bulkAbort) { progress.textContent += ' (stopped)'; toast('Bulk run stopped'); }
+  else toast(`Done — ran on ${done} server${done !== 1 ? 's' : ''}`);
+}
+
+function stopBulk() {
+  _bulkAbort = true;
+}
+
+function bulkToggleResult(id) {
+  const el = document.getElementById(`bulk-out-${id}`);
+  if (el) el.classList.toggle('open');
+}
+
+async function runBulkServer(server, cmd, outEl) {
+  const ec = getEffectiveCredential(server);
+  const credId = ec?.id ?? null;
+  if (outEl) { outEl.classList.add('open'); outEl.textContent = ''; }
+  await new Promise((resolve, reject) => {
+    const payload = { server_id: server.id, command_id: cmd.id, credential_id: credId };
+    fetch('/api/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(res => {
+      if (!res.ok) return res.json().then(d => reject(new Error(d.detail || res.statusText)));
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      function read() {
+        reader.read().then(({ done, value }) => {
+          if (done) { resolve(); return; }
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop();
+          lines.forEach(line => {
+            if (!line.startsWith('data:')) return;
+            try {
+              const d = JSON.parse(line.slice(5).trim());
+              if (outEl && d.output != null) outEl.textContent += d.output;
+            } catch(_) {}
+          });
+          if (outEl) outEl.scrollTop = outEl.scrollHeight;
+          if (_bulkAbort) { reader.cancel(); resolve(); return; }
+          read();
+        }).catch(reject);
+      }
+      read();
+    }).catch(reject);
+  });
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
