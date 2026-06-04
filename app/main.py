@@ -90,7 +90,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 app = FastAPI(title="RCommander")
 
