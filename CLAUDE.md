@@ -15,6 +15,14 @@
 
 - The web app must be functional and intuitive on both **desktop and mobile**
 
+## GitHub README
+
+- Include a **Features** section with bullet points and a short description of each feature
+- Include an **Updating** section with:
+  ```bash
+  docker compose pull rcommander && docker compose up -d rcommander
+  ```
+
 ## Features
 
 - **Servers** — manage SSH and WinRM hosts with host, port, type, and optional description
@@ -33,13 +41,6 @@
 - **Clone server** — duplicate an existing server as a starting point
 - **Responsive** — works on desktop and mobile
 - **SQLite persistence** — single-file database stored under `/data`
-
-## GitHub README
-
-- Include an **Updating** section with:
-  ```bash
-  docker compose pull rcommander && docker compose up -d rcommander
-  ```
 
 ## docker-compose.yml template
 
