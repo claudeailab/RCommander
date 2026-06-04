@@ -90,6 +90,8 @@ def _migrate():
 
 _migrate()
 
+APP_VERSION = "1.3.0"
+
 app = FastAPI(title="RCommander")
 
 
@@ -248,6 +250,11 @@ def _winrm_stream(host: str, port: int, username: str, password: str, command: s
 
 
 # ── Servers ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/version")
+def get_version():
+    return {"version": APP_VERSION}
+
 
 @app.get("/api/servers")
 def list_servers():
