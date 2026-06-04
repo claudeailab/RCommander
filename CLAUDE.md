@@ -15,6 +15,25 @@
 
 - The web app must be functional and intuitive on both **desktop and mobile**
 
+## Features
+
+- **Servers** — manage SSH and WinRM hosts with host, port, type, and optional description
+- **Nested folders** — organise servers into folders and sub-folders for large inventories
+- **Folder credentials** — assign credentials to a folder; all servers inside inherit them
+- **Credentials** — store username/password or SSH private key pairs securely
+- **Commands** — save reusable commands with a shell type badge (SH, CMD, PS)
+- **Shell types** — mark each command as SH (bash/shell), CMD (Windows batch), or PowerShell
+- **Execute (Single)** — pick a server and command, stream live output in a built-in terminal
+- **Execute (Multiple)** — run a command on multiple servers simultaneously with a searchable folder tree; results expand inline
+- **Command search** — filter the command dropdown as you type
+- **Server filter** — search servers by name, host, or group in the Execute (Multiple) tree
+- **Select filtered** — Select All only picks servers matching the active search query
+- **Unlock** — override a locked command's pre-selected server with one click
+- **CSV import** — bulk-import servers from a CSV file
+- **Clone server** — duplicate an existing server as a starting point
+- **Responsive** — works on desktop and mobile
+- **SQLite persistence** — single-file database stored under `/data`
+
 ## GitHub README
 
 - Include an **Updating** section with:
