@@ -2145,7 +2145,14 @@ function bulkServerCheck(id, checked) {
 }
 
 function bulkSelectAll() {
-  state.servers.forEach(s => _bulkSelected.add(s.id));
+  const query = (document.getElementById('bulk-server-search')?.value || '').toLowerCase().trim();
+  const pool = query
+    ? state.servers.filter(s =>
+        s.name.toLowerCase().includes(query) ||
+        (s.host || '').toLowerCase().includes(query) ||
+        (s.server_group || '').toLowerCase().includes(query))
+    : state.servers;
+  pool.forEach(s => _bulkSelected.add(s.id));
   renderBulkTree();
 }
 
@@ -2304,7 +2311,7 @@ function bulkToggleResult(id) {
 
 async function runBulkServer(server, cmd, outEl) {
   const ec = getEffectiveCredential(server);
-  const credId = ec?.id ?? null;
+  const credId = ec?.id ?? 0;
   if (outEl) { outEl.classList.add('open'); outEl.textContent = ''; }
   await new Promise((resolve, reject) => {
     const payload = { server_id: server.id, command_id: cmd.id, credential_id: credId };
@@ -2321,13 +2328,18 @@ async function runBulkServer(server, cmd, outEl) {
         reader.read().then(({ done, value }) => {
           if (done) { resolve(); return; }
           buf += decoder.decode(value, { stream: true });
-          const lines = buf.split('\n');
-          buf = lines.pop();
-          lines.forEach(line => {
-            if (!line.startsWith('data:')) return;
+          const parts = buf.split('\n\n');
+          buf = parts.pop();
+          parts.forEach(part => {
+            const line = part.replace(/^data: /, '').trim();
+            if (!line) return;
             try {
-              const d = JSON.parse(line.slice(5).trim());
-              if (outEl && d.output != null) outEl.textContent += d.output;
+              const d = JSON.parse(line);
+              if (outEl) {
+                if (d.type === 'stdout' || d.type === 'stderr') outEl.textContent += d.text;
+                else if (d.type === 'error') outEl.textContent += '[Error] ' + d.text + '\n';
+                else if (d.type === 'exit' && d.code !== 0) outEl.textContent += `\n[Exit code: ${d.code}]`;
+              }
             } catch(_) {}
           });
           if (outEl) outEl.scrollTop = outEl.scrollHeight;
