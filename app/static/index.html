@@ -1150,9 +1150,12 @@ function renderCommands() {
     const serverBadge = linkedServer
       ? `<span class="badge" style="background:#1c3a5e;color:#58a6ff;font-size:10px;padding:1px 6px;margin-left:6px" title="Locked to this server">${escape(linkedServer.name)}</span>`
       : '';
+    const shellBadge = c.shell_type === 'powershell'
+      ? `<span class="badge" style="background:#2d1f4e;color:#a78bfa;font-size:10px;padding:1px 6px;margin-left:6px" title="PowerShell">PS</span>`
+      : '';
     return `
     <tr>
-      <td class="m-name"><strong>${escape(c.name)}</strong>${serverBadge}</td>
+      <td class="m-name"><strong>${escape(c.name)}</strong>${serverBadge}${shellBadge}</td>
       <td class="m-sub" style="max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><code style="color:var(--warn);font-size:12px">${escape(c.command)}</code></td>
       <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
       <td class="m-actions">
@@ -1482,6 +1485,14 @@ function openModal(type, id = null, defaultGroup = '') {
         <textarea id="f-command" rows="3" placeholder="df -h">${escape(c?.command ?? '')}</textarea>
       </div>
       <div class="form-group">
+        <label>Shell Type</label>
+        <select id="f-shell-type">
+          <option value="cmd" ${(c?.shell_type ?? 'cmd') === 'cmd' ? 'selected' : ''}>CMD (Windows batch)</option>
+          <option value="powershell" ${c?.shell_type === 'powershell' ? 'selected' : ''}>PowerShell</option>
+        </select>
+        <div class="hint">Only applies when running on a WinRM (Windows) server</div>
+      </div>
+      <div class="form-group">
         <label>Default Server</label>
         <select id="f-server-id">
           <option value="">— any server —</option>
@@ -1567,7 +1578,8 @@ async function saveCredential() {
 async function saveCommand() {
   const serverIdVal = document.getElementById('f-server-id')?.value;
   const body = { name: val('f-name'), command: document.getElementById('f-command')?.value?.trim() ?? '',
-    description: val('f-desc'), server_id: serverIdVal ? parseInt(serverIdVal) : null };
+    description: val('f-desc'), server_id: serverIdVal ? parseInt(serverIdVal) : null,
+    shell_type: document.getElementById('f-shell-type')?.value ?? 'cmd' };
   if (!body.name || !body.command) { toast('Name and Command are required', 'fail'); return; }
   await saveEntity('commands', 'Command', body);
 }

@@ -51,6 +51,7 @@ class CommandRow(Base):
     command = Column(Text, nullable=False)
     description = Column(Text, default="")
     server_id = Column(Integer, nullable=True)
+    shell_type = Column(String, default="cmd")
 
 
 class GroupRow(Base):
@@ -77,7 +78,8 @@ def _migrate():
                         ("server_group",  "TEXT NOT NULL DEFAULT ''")],
         "credentials": [("description",   "TEXT NOT NULL DEFAULT ''")],
         "commands":    [("description",   "TEXT NOT NULL DEFAULT ''"),
-                        ("server_id",     "INTEGER")],
+                        ("server_id",     "INTEGER"),
+                        ("shell_type",    "TEXT NOT NULL DEFAULT 'cmd'")],
     }
     with engine.connect() as conn:
         for table, columns in migrations.items():
@@ -90,7 +92,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 app = FastAPI(title="RCommander")
 
@@ -120,6 +122,7 @@ class CommandIn(BaseModel):
     command: str
     description: str = ""
     server_id: Optional[int] = None
+    shell_type: str = "cmd"
 
 
 class ExecuteRequest(BaseModel):
@@ -221,7 +224,7 @@ def _ssh_stream(host: str, port: int, username: str, password: str, private_key:
         yield _sse({"type": "done"})
 
 
-def _winrm_stream(host: str, port: int, username: str, password: str, command: str):
+def _winrm_stream(host: str, port: int, username: str, password: str, command: str, shell_type: str = "cmd"):
     try:
         protocol = "https" if port == 5986 else "http"
         endpoint = f"{protocol}://{host}:{port}/wsman"
@@ -231,7 +234,7 @@ def _winrm_stream(host: str, port: int, username: str, password: str, command: s
             transport="basic",
             server_cert_validation="ignore",
         )
-        if command.strip().lower().startswith("powershell") or command.strip().startswith("$"):
+        if shell_type == "powershell":
             result = s.run_ps(command)
         else:
             result = s.run_cmd(command)
@@ -502,12 +505,13 @@ def execute(req: ExecuteRequest):
         s_host, s_port = server.host, server.port
         c_user, c_pass, c_key = cred.username, cred.password, cred.private_key
         c_command = cmd.command
+        c_shell_type = cmd.shell_type or "cmd"
 
     def stream():
         if s_type == "ssh":
             yield from _ssh_stream(s_host, s_port, c_user, c_pass, c_key, c_command)
         elif s_type == "winrm":
-            yield from _winrm_stream(s_host, s_port, c_user, c_pass, c_command)
+            yield from _winrm_stream(s_host, s_port, c_user, c_pass, c_command, c_shell_type)
         else:
             yield _sse({"type": "error", "text": f"Unknown server type: {s_type}"})
             yield _sse({"type": "done"})
