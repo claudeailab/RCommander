@@ -12,7 +12,7 @@ A self-hosted web UI for running commands on remote servers over SSH (Linux/Mac)
 - **Credentials** — store username/password or SSH private key pairs
 - **Commands** — save reusable commands; optionally lock a command to a specific server
 - **Execute (Single)** — pick a server and command, stream live output in a built-in terminal
-- **Execute (Bulk)** — run a command on multiple servers simultaneously with a searchable folder tree
+- **Execute (Multiple)** — run a command on multiple servers simultaneously with a searchable folder tree
 - **Command search** — filter the command dropdown as you type
 - **Unlock** — override a locked command's pre-selected server with one click
 - **CSV import** — bulk-import servers from a CSV file
