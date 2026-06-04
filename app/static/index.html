@@ -481,14 +481,8 @@
   .bulk-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px; }
   .bulk-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
   .bulk-tree { height: 420px; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--border); border-radius: 6px; margin-top: 8px; background: var(--bg); }
-  .bulk-item { display: flex; align-items: center; padding: 5px 8px; font-size: 13px; user-select: none; cursor: default; width: 100%; box-sizing: border-box; }
+  .bulk-item { display: flex; align-items: center; padding: 5px 8px; font-size: 13px; user-select: none; }
   .bulk-item:hover { background: #1a2030; }
-  .bulk-item input[type=checkbox] { cursor: pointer; accent-color: var(--accent-h); flex-shrink: 0; margin-right: 6px; }
-  .bulk-chevron { flex-shrink: 0; margin-right: 4px; color: var(--muted); transition: transform 0.12s; cursor: pointer; padding: 2px; }
-  .bulk-chevron.open { transform: rotate(90deg); }
-  .bulk-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-  .bulk-item-folder > .bulk-item-name { font-weight: 500; }
-  .bulk-item-meta { flex-shrink: 0; color: var(--muted); font-size: 11px; margin-left: 6px; }
   .bulk-result-row { border-bottom: 1px solid var(--border); }
   .bulk-result-hdr { display: flex; align-items: center; gap: 10px; padding: 8px 16px; cursor: pointer; font-size: 13px; }
   .bulk-result-hdr:hover { background: #1a2030; }
@@ -2012,26 +2006,49 @@ let _bulkSelected = new Set();
 let _bulkAbort = false;
 let _bulkRunning = false;
 
+function _buildBulkNodes() {
+  const nodes = {};
+  const roots = new Set();
+  for (const groupPath of state.groups) {
+    const parts = groupPath.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const path = parts.slice(0, i).join('/');
+      if (!nodes[path]) nodes[path] = { servers: [], children: new Set() };
+      if (i === 1) roots.add(path);
+      else nodes[parts.slice(0, i - 1).join('/')].children.add(path);
+    }
+  }
+  for (const s of state.servers.filter(s => s.server_group)) {
+    const parts = s.server_group.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const path = parts.slice(0, i).join('/');
+      if (!nodes[path]) nodes[path] = { servers: [], children: new Set() };
+      if (i === 1) roots.add(path);
+      else nodes[parts.slice(0, i - 1).join('/')].children.add(path);
+    }
+    nodes[s.server_group].servers.push(s);
+  }
+  return { nodes, roots };
+}
+
+function _bulkCountAll(path, nodes) {
+  if (!nodes[path]) return 0;
+  return nodes[path].servers.length + [...nodes[path].children].reduce((n, c) => n + _bulkCountAll(c, nodes), 0);
+}
+
+function _bulkGetAllServerIds(path, nodes) {
+  if (!nodes[path]) return [];
+  const ids = nodes[path].servers.map(s => s.id);
+  for (const c of nodes[path].children) ids.push(..._bulkGetAllServerIds(c, nodes));
+  return ids;
+}
+
 function renderBulkTree() {
   const query = (document.getElementById('bulk-server-search')?.value || '').toLowerCase().trim();
   const container = document.getElementById('bulk-tree');
   if (!container) return;
 
-  // Build group lookup
-  const groups = {};
-  state.servers.forEach(s => {
-    const g = s.server_group || '';
-    if (!groups[g]) groups[g] = [];
-    groups[g].push(s);
-  });
-
-  // Collect all folder paths (including intermediate)
-  const allPaths = new Set();
-  Object.keys(groups).forEach(g => {
-    if (!g) return;
-    const parts = g.split('/');
-    for (let i = 1; i <= parts.length; i++) allPaths.add(parts.slice(0, i).join('/'));
-  });
+  const { nodes, roots } = _buildBulkNodes();
 
   if (query) {
     const matched = state.servers.filter(s =>
@@ -2040,85 +2057,61 @@ function renderBulkTree() {
       (s.server_group || '').toLowerCase().includes(query)
     );
     container.innerHTML = matched.length
-      ? matched.map(s => _bulkServerRow(s, 0)).join('')
+      ? matched.map(s => _bulkServerRowHTML(s, 0)).join('')
       : '<div style="padding:16px;color:var(--muted);font-size:13px;text-align:center">No servers match</div>';
-    container.querySelectorAll('input[data-indet="1"]').forEach(cb => { cb.indeterminate = true; });
+    container.querySelectorAll('input[data-bi]').forEach(cb => { cb.indeterminate = true; });
     _updateBulkCount();
     return;
   }
 
-  const rootFolders = [...allPaths].filter(p => !p.includes('/'));
-  const rootServers = groups[''] || [];
-
-  function renderFolder(path, depth) {
-    const name = path.split('/').pop();
+  function folderRowHTML(path, depth) {
+    const label = path.split('/').pop();
     const expanded = _bulkExpanded.has(path);
-    const childPaths = [...allPaths].filter(p => {
-      const parts = p.split('/');
-      return parts.length === depth + 2 && p.startsWith(path + '/');
-    });
-    const directServers = groups[path] || [];
-    const allInside = _bulkGetAllServersUnder(path, groups);
-    const checkedCount = allInside.filter(id => _bulkSelected.has(id)).length;
-    const isChecked = allInside.length > 0 && checkedCount === allInside.length;
-    const isIndet = checkedCount > 0 && checkedCount < allInside.length;
-
-    const indent = depth * 18;
-    let html = `<div class="bulk-item bulk-item-folder" style="padding-left:${8 + indent}px" onclick="bulkToggleFolderExpand('${escape(path)}')">
-      <input type="checkbox" ${isChecked ? 'checked' : ''} ${isIndet ? 'data-indet="1"' : ''}
-        onclick="event.stopPropagation()" onchange="bulkFolderCheck('${escape(path)}',this.checked)">
-      <svg class="bulk-chevron${expanded ? ' open' : ''}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" onclick="event.stopPropagation();bulkToggleFolderExpand('${escape(path)}')">
-        <polyline points="9 18 15 12 9 6"/>
-      </svg>
-      <span class="bulk-item-name">${escape(name)}</span>
-      <span class="bulk-item-meta">${allInside.length}</span>
+    const total = _bulkCountAll(path, nodes);
+    const allIds = _bulkGetAllServerIds(path, nodes);
+    const n = allIds.filter(id => _bulkSelected.has(id)).length;
+    const isChecked = allIds.length > 0 && n === allIds.length;
+    const isIndet = n > 0 && n < allIds.length;
+    const padLeft = 8 + depth * 16;
+    const icon = expanded ? '▼' : '▶';
+    let html = `<div class="bulk-item" style="padding-left:${padLeft}px;cursor:pointer" onclick="bulkToggleFolderExpand('${escape(path)}')">
+      <input type="checkbox" ${isChecked ? 'checked' : ''} ${isIndet ? 'data-bi' : ''}
+        onclick="event.stopPropagation()" onchange="bulkFolderCheck('${escape(path)}',this.checked)"
+        style="margin-right:6px;cursor:pointer;flex-shrink:0;accent-color:var(--accent-h)">
+      <span style="font-size:10px;color:var(--muted);margin-right:6px;width:8px;flex-shrink:0">${icon}</span>
+      <span style="font-weight:500;flex:1;min-width:0">${escape(label)}</span>
+      <span style="color:var(--muted);font-size:11px;flex-shrink:0;margin-left:4px">(${total})</span>
     </div>`;
-
     if (expanded) {
-      childPaths.sort().forEach(cp => { html += renderFolder(cp, depth + 1); });
-      directServers.forEach(s => { html += _bulkServerRow(s, depth + 1); });
+      for (const child of [...nodes[path].children].sort()) html += folderRowHTML(child, depth + 1);
+      for (const s of nodes[path].servers) html += _bulkServerRowHTML(s, depth + 1);
     }
     return html;
   }
 
   let html = '';
-  rootFolders.sort().forEach(p => { html += renderFolder(p, 0); });
-  rootServers.forEach(s => { html += _bulkServerRow(s, 0); });
+  for (const root of [...roots].sort()) html += folderRowHTML(root, 0);
+  for (const s of state.servers.filter(s => !s.server_group)) html += _bulkServerRowHTML(s, 0);
   if (!html) html = '<div style="padding:16px;color:var(--muted);font-size:13px;text-align:center">No servers yet</div>';
   container.innerHTML = html;
-
-  container.querySelectorAll('input[data-indet="1"]').forEach(cb => { cb.indeterminate = true; });
+  container.querySelectorAll('input[data-bi]').forEach(cb => { cb.indeterminate = true; });
   _updateBulkCount();
 }
 
-function _bulkServerRow(s, depth) {
+function _bulkServerRowHTML(s, depth) {
   const checked = _bulkSelected.has(s.id);
-  const indent = depth * 18 + 26; // align with folder names (past chevron space)
-  return `<div class="bulk-item" style="padding-left:${8 + indent}px">
-    <input type="checkbox" ${checked ? 'checked' : ''} onchange="bulkServerCheck(${s.id},this.checked)">
-    <span class="bulk-item-name">${escape(s.name)}</span>
-    <span class="bulk-item-meta">${escape(s.host || '')}</span>
+  const padLeft = 8 + depth * 16 + 22;
+  return `<div class="bulk-item" style="padding-left:${padLeft}px">
+    <input type="checkbox" ${checked ? 'checked' : ''} onchange="bulkServerCheck(${s.id},this.checked)"
+      style="margin-right:6px;cursor:pointer;flex-shrink:0;accent-color:var(--accent-h)">
+    <span style="flex:1;min-width:0">${escape(s.name)}</span>
+    <span style="color:var(--muted);font-size:11px;flex-shrink:0;margin-left:4px">${escape(s.host || '')}</span>
   </div>`;
 }
 
-function _bulkGetAllServersUnder(path, groups) {
-  const ids = [];
-  const prefix = path + '/';
-  Object.keys(groups).forEach(g => {
-    if (g === path || g.startsWith(prefix)) groups[g].forEach(s => ids.push(s.id));
-  });
-  return ids;
-}
-
 function bulkExpandAll() {
-  const allPaths = new Set();
-  state.servers.forEach(s => {
-    const g = s.server_group || '';
-    if (!g) return;
-    const parts = g.split('/');
-    for (let i = 1; i <= parts.length; i++) allPaths.add(parts.slice(0, i).join('/'));
-  });
-  allPaths.forEach(p => _bulkExpanded.add(p));
+  const { nodes } = _buildBulkNodes();
+  Object.keys(nodes).forEach(p => _bulkExpanded.add(p));
   renderBulkTree();
 }
 
@@ -2134,13 +2127,8 @@ function bulkToggleFolderExpand(path) {
 }
 
 function bulkFolderCheck(path, checked) {
-  const groups = {};
-  state.servers.forEach(s => {
-    const g = s.server_group || '';
-    if (!groups[g]) groups[g] = [];
-    groups[g].push(s);
-  });
-  const ids = _bulkGetAllServersUnder(path, groups);
+  const { nodes } = _buildBulkNodes();
+  const ids = _bulkGetAllServerIds(path, nodes);
   ids.forEach(id => { if (checked) _bulkSelected.add(id); else _bulkSelected.delete(id); });
   renderBulkTree();
 }
