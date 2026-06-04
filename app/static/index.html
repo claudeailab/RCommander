@@ -1152,7 +1152,9 @@ function renderCommands() {
       : '';
     const shellBadge = c.shell_type === 'powershell'
       ? `<span class="badge" style="background:#2d1f4e;color:#a78bfa;font-size:10px;padding:1px 6px;margin-left:6px" title="PowerShell">PS</span>`
-      : '';
+      : c.shell_type === 'sh'
+      ? `<span class="badge" style="background:#0d2b1f;color:#3fb950;font-size:10px;padding:1px 6px;margin-left:6px" title="SH / bash">SH</span>`
+      : `<span class="badge" style="background:#1e1e1e;color:#8b949e;font-size:10px;padding:1px 6px;margin-left:6px" title="CMD / Windows batch">CMD</span>`;
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong>${serverBadge}${shellBadge}</td>
@@ -1487,10 +1489,11 @@ function openModal(type, id = null, defaultGroup = '') {
       <div class="form-group">
         <label>Shell Type</label>
         <select id="f-shell-type">
+          <option value="sh" ${c?.shell_type === 'sh' ? 'selected' : ''}>SH (bash/shell)</option>
           <option value="cmd" ${(c?.shell_type ?? 'cmd') === 'cmd' ? 'selected' : ''}>CMD (Windows batch)</option>
           <option value="powershell" ${c?.shell_type === 'powershell' ? 'selected' : ''}>PowerShell</option>
         </select>
-        <div class="hint">Only applies when running on a WinRM (Windows) server</div>
+        <div class="hint">SH for SSH servers; CMD or PowerShell for WinRM (Windows) servers</div>
       </div>
       <div class="form-group">
         <label>Default Server</label>
