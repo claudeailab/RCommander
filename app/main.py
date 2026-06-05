@@ -192,6 +192,7 @@ def _sse(obj: dict) -> str:
 
 
 def _ssh_stream(host: str, port: int, username: str, password: str, private_key: str, command: str):
+    import select
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -204,18 +205,39 @@ def _ssh_stream(host: str, port: int, username: str, password: str, private_key:
             raise ValueError("No authentication method provided")
 
         client.connect(host, port=port, **connect_kwargs)
-        _, stdout, stderr = client.exec_command(command)
+        _, stdout, stderr = client.exec_command(command, timeout=None)
+        channel = stdout.channel
 
-        for line in iter(lambda: stdout.readline(4096), ""):
-            if not line:
-                break
-            yield _sse({"type": "stdout", "text": line})
+        # Buffers for incomplete lines on each stream
+        buf_out = b""
+        buf_err = b""
 
-        err = stderr.read().decode("utf-8", errors="replace")
-        if err:
-            yield _sse({"type": "stderr", "text": err})
+        while not channel.closed or channel.recv_ready() or channel.recv_stderr_ready():
+            # Wait up to 0.2 s for data on either stream
+            readable, _, _ = select.select([channel], [], [], 0.2)
+            if readable:
+                if channel.recv_ready():
+                    chunk = channel.recv(4096)
+                    if chunk:
+                        buf_out += chunk
+                        while b"\n" in buf_out:
+                            line, buf_out = buf_out.split(b"\n", 1)
+                            yield _sse({"type": "stdout", "text": line.decode("utf-8", errors="replace") + "\n"})
+                if channel.recv_stderr_ready():
+                    chunk = channel.recv_stderr(4096)
+                    if chunk:
+                        buf_err += chunk
+                        while b"\n" in buf_err:
+                            line, buf_err = buf_err.split(b"\n", 1)
+                            yield _sse({"type": "stderr", "text": line.decode("utf-8", errors="replace") + "\n"})
 
-        code = stdout.channel.recv_exit_status()
+        # Flush any remaining partial output (no trailing newline)
+        if buf_out:
+            yield _sse({"type": "stdout", "text": buf_out.decode("utf-8", errors="replace")})
+        if buf_err:
+            yield _sse({"type": "stderr", "text": buf_err.decode("utf-8", errors="replace")})
+
+        code = channel.recv_exit_status()
         yield _sse({"type": "exit", "code": code})
     except Exception as exc:
         yield _sse({"type": "error", "text": str(exc)})
