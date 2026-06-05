@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>RCommander</title>
 <link rel="icon" type="image/x-icon" href="/favicon.ico">
 <style>
@@ -314,7 +314,7 @@
     border-radius: 6px;
     color: var(--text);
     padding: 8px 10px;
-    font-size: 13px;
+    font-size: 16px; /* ≥16px prevents iOS/Android auto-zoom on focus */
     font-family: inherit;
     width: 100%;
     transition: border-color .15s;
