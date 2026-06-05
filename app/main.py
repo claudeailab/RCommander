@@ -204,7 +204,7 @@ def _ssh_stream(host: str, port: int, username: str, password: str, private_key:
             raise ValueError("No authentication method provided")
 
         client.connect(host, port=port, **connect_kwargs)
-        _, stdout, stderr = client.exec_command(command, get_pty=True)
+        _, stdout, stderr = client.exec_command(command)
 
         for line in iter(lambda: stdout.readline(4096), ""):
             if not line:

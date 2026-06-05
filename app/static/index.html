@@ -1706,11 +1706,17 @@ async function runCommand() {
   }
 }
 
+function stripAnsi(str) {
+  // Strip ANSI/VT100 escape sequences (colours, cursor moves, spinner chars, etc.)
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]|\x1b[PX^_][\s\S]*?\x1b\\\\|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\x1b[^\[]/g, '');
+}
+
 function appendTerm(cls, text) {
   const term = _term ?? document.getElementById('terminal');
   const div = document.createElement('div');
   div.className = `terminal-line ${cls}`;
-  div.textContent = text;
+  div.textContent = stripAnsi(text);
   term.appendChild(div);
   term.scrollTop = term.scrollHeight;
 }
