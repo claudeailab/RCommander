@@ -205,15 +205,17 @@ def _ssh_stream(host: str, port: int, username: str, password: str, private_key:
             raise ValueError("No authentication method provided")
 
         client.connect(host, port=port, **connect_kwargs)
-        _, stdout, stderr = client.exec_command(command, timeout=None)
+        # get_pty=True gives a real PTY so programs emit colours/formatting
+        # exactly as they would in an interactive SSH session
+        _, stdout, stderr = client.exec_command(command, get_pty=True, timeout=None)
         channel = stdout.channel
 
-        # Buffers for incomplete lines on each stream
+        # Stream raw chunks — PTY output uses \r\n and cursor codes that
+        # don't split cleanly on \n, so send chunks as-is
         buf_out = b""
         buf_err = b""
 
         while not channel.closed or channel.recv_ready() or channel.recv_stderr_ready():
-            # Wait up to 0.2 s for data on either stream
             readable, _, _ = select.select([channel], [], [], 0.2)
             if readable:
                 if channel.recv_ready():
