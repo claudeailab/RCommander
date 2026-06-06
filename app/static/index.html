@@ -522,18 +522,7 @@
     text-align: left;
   }
   .dropdown-item:hover { background: #1f2937; }
-
-  /* ── xterm PTY terminal ── */
-  #xterm-container { display:none; flex:1; min-height:0; background:#0d1117; border-radius:8px; border:1px solid var(--border); overflow:hidden; padding:6px; }
-  #xterm-container .xterm { height:100%; }
-  .btn-terminal { background:#1f2937; border:1px solid var(--border); color:var(--text); border-radius:6px; padding:6px 14px; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background .15s; }
-  .btn-terminal:hover { background:#374151; }
-  .btn-terminal.active { background:#1d3557; border-color:#58a6ff; color:#58a6ff; }
-
 </style>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
 </head>
 <body>
 
@@ -742,22 +731,15 @@
               <button onclick="resetExecSelection()" style="background:none;border:1px solid var(--warn);color:var(--warn);border-radius:5px;padding:2px 9px;font-size:11px;cursor:pointer;font-weight:600;letter-spacing:.3px">✕ Unlock</button>
             </div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button class="btn btn-run" id="run-btn" onclick="runCommand()">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run
-            </button>
-            <button class="btn-terminal" id="term-btn" onclick="toggleTerminal()">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-              Terminal
-            </button>
-          </div>
+          <button class="btn btn-run" id="run-btn" onclick="runCommand()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Run
+          </button>
         </div>
-        <div style="display:flex;flex-direction:column;flex:1;min-height:0;gap:8px">
-          <div class="terminal" id="terminal" style="flex:1">
+        <div>
+          <div class="terminal" id="terminal">
             <div class="terminal-placeholder">Select a server and command, then click Run.</div>
           </div>
-          <div id="xterm-container"></div>
         </div>
       </div>
     </div>
@@ -1614,105 +1596,6 @@ async function del(type, id) {
     await loadAll();
     toast(`${label} deleted`);
   } catch(e) { toast(e.message, 'fail'); }
-}
-
-// ── Terminal (xterm.js PTY) ───────────────────────────────────────────────────
-let _xtermInst = null;
-let _xtermWs   = null;
-let _termOpen  = false;
-
-function toggleTerminal() {
-  if (_termOpen) {
-    closeTerminal();
-  } else {
-    openTerminal();
-  }
-}
-
-function openTerminal() {
-  const serverId = document.getElementById('exec-server').value;
-  if (!serverId) { toast('Select a server first', 'fail'); return; }
-
-  const server = state.servers.find(s => s.id == serverId);
-  if (!server) { toast('Server not found', 'fail'); return; }
-
-  // resolve credential
-  const credSel = document.getElementById('exec-credential');
-  const credId  = credSel ? credSel.value : (server.credential_id || '');
-
-  const container = document.getElementById('xterm-container');
-  const oldTerm   = document.getElementById('terminal');
-  oldTerm.style.display  = 'none';
-  container.style.display = 'flex';
-  container.style.flexDirection = 'column';
-  container.style.flex = '1';
-  container.style.minHeight = '300px';
-
-  // update button
-  const btn = document.getElementById('term-btn');
-  btn.innerHTML = \`<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Close Terminal\`;
-  _termOpen = true;
-
-  // build xterm
-  const term = new Terminal({
-    theme: { background:'#0d1117', foreground:'#c9d1d9', cursor:'#58a6ff' },
-    fontFamily: '"Cascadia Code","Fira Code",monospace',
-    fontSize: 14,
-    cursorBlink: true,
-    allowProposedApi: true,
-    scrollback: 5000,
-  });
-  const fitAddon = new FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
-  term.open(container);
-  fitAddon.fit();
-  _xtermInst = term;
-
-  // resize observer
-  const ro = new ResizeObserver(() => { try { fitAddon.fit(); } catch(_){} });
-  ro.observe(container);
-
-  // websocket
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  let url = \`\${proto}://\${location.host}/api/terminal/\${serverId}\`;
-  if (credId) url += \`?credential_id=\${credId}\`;
-  const ws = new WebSocket(url);
-  ws.binaryType = 'arraybuffer';
-  _xtermWs = ws;
-
-  ws.onopen = () => {
-    term.focus();
-    // send initial resize
-    ws.send(JSON.stringify({ type:'resize', cols: term.cols, rows: term.rows }));
-  };
-  ws.onmessage = (e) => {
-    if (e.data instanceof ArrayBuffer) {
-      term.write(new Uint8Array(e.data));
-    } else {
-      term.write(e.data);
-    }
-  };
-  ws.onclose = () => term.writeln('\r\n\x1b[33m[disconnected]\x1b[0m');
-  ws.onerror = () => term.writeln('\r\n\x1b[31m[connection error]\x1b[0m');
-
-  term.onData(data => { if (ws.readyState === WebSocket.OPEN) ws.send(data); });
-  term.onResize(({ cols, rows }) => {
-    if (ws.readyState === WebSocket.OPEN)
-      ws.send(JSON.stringify({ type:'resize', cols, rows }));
-  });
-}
-
-function closeTerminal() {
-  if (_xtermWs)   { _xtermWs.close();   _xtermWs = null; }
-  if (_xtermInst) { _xtermInst.dispose(); _xtermInst = null; }
-  const container = document.getElementById('xterm-container');
-  container.style.display = 'none';
-  container.innerHTML = '';
-  const oldTerm = document.getElementById('terminal');
-  oldTerm.style.display = '';
-  const btn = document.getElementById('term-btn');
-  btn.innerHTML = \`<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/></svg> Terminal\`;
-  _termOpen = false;
 }
 
 // ── Execute ───────────────────────────────────────────────────────────────────
