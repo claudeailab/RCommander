@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import os
@@ -5,7 +6,7 @@ from typing import Literal, Optional
 
 import paramiko
 import winrm
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -542,6 +543,101 @@ def execute(req: ExecuteRequest):
 
 
 # ── Health & static ───────────────────────────────────────────────────────────
+
+
+@app.websocket("/api/terminal/{server_id}")
+async def terminal_ws(websocket: WebSocket, server_id: int, credential_id: int = None):
+    await websocket.accept()
+    with Session() as db:
+        server = db.get(ServerRow, server_id)
+        if not server:
+            await websocket.send_text("\r\n[Server not found]\r\n")
+            await websocket.close()
+            return
+        cred_id = credential_id or server.credential_id
+        if cred_id is None:
+            # try folder credential
+            folder_id = server.folder_id if hasattr(server, "folder_id") else None
+            if folder_id:
+                fc = db.query(FolderCredentialRow).filter_by(folder_id=folder_id).first()
+                if fc:
+                    cred_id = fc.credential_id
+        cred = db.get(CredentialRow, cred_id) if cred_id else None
+        if not cred:
+            await websocket.send_text("\r\n[No credential found for this server]\r\n")
+            await websocket.close()
+            return
+        host = server.host
+        port = server.port or 22
+        username = cred.username
+        password = cred.password or ""
+        private_key = cred.private_key or ""
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        connect_kwargs: dict = {"username": username, "timeout": 15}
+        if private_key:
+            key_file = io.StringIO(private_key)
+            connect_kwargs["pkey"] = paramiko.RSAKey.from_private_key(key_file)
+        else:
+            connect_kwargs["password"] = password
+        client.connect(host, port=port, **connect_kwargs)
+
+        chan = client.invoke_shell(term="xterm-256color", width=220, height=50)
+        chan.settimeout(0.0)
+
+        loop = asyncio.get_event_loop()
+
+        async def ws_to_ssh():
+            try:
+                while True:
+                    msg = await websocket.receive_text()
+                    if chan.closed:
+                        break
+                    # Resize message: {"type":"resize","cols":N,"rows":N}
+                    try:
+                        obj = json.loads(msg)
+                        if obj.get("type") == "resize":
+                            chan.resize_pty(width=int(obj["cols"]), height=int(obj["rows"]))
+                            continue
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                    chan.send(msg)
+            except (WebSocketDisconnect, Exception):
+                pass
+
+        async def ssh_to_ws():
+            try:
+                while True:
+                    await asyncio.sleep(0.02)
+                    if chan.recv_ready():
+                        data = chan.recv(4096)
+                        if not data:
+                            break
+                        await websocket.send_bytes(data)
+                    if chan.exit_status_ready():
+                        # drain remaining
+                        while chan.recv_ready():
+                            data = chan.recv(4096)
+                            if data:
+                                await websocket.send_bytes(data)
+                        break
+            except (WebSocketDisconnect, Exception):
+                pass
+
+        await asyncio.gather(ws_to_ssh(), ssh_to_ws())
+    except Exception as e:
+        try:
+            await websocket.send_text(f"\r\n[Connection error: {e}]\r\n")
+        except Exception:
+            pass
+    finally:
+        client.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 @app.get("/api/health")
 def health():
