@@ -95,7 +95,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.4.0"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -165,6 +165,175 @@ def _vnc_page(token: str, name: str, password: str) -> str:
         .replace("%%PW%%", json.dumps(password))
         .replace("%%NAME%%", safe)
     )
+
+
+# ── RDP session store (short-lived, in-memory) ────────────────────────────────
+_rdp_sessions: dict = {}
+
+
+def _prune_rdp_sessions() -> None:
+    cutoff = time.time() - 300
+    for k in [k for k, v in _rdp_sessions.items() if v["ts"] < cutoff]:
+        del _rdp_sessions[k]
+
+
+def _guac_encode(opcode: str, *args) -> str:
+    """Encode a Guacamole protocol instruction."""
+    parts = [str(opcode)] + [str(a) for a in args]
+    return ",".join(f"{len(p)}.{p}" for p in parts) + ";"
+
+
+def _guac_parse_instr(instr: str) -> list:
+    """Parse a Guacamole instruction into a list of string elements."""
+    elements = []
+    s = instr.rstrip(";")
+    i = 0
+    while i < len(s):
+        dot = s.index(".", i)
+        length = int(s[i:dot])
+        value = s[dot + 1:dot + 1 + length]
+        elements.append(value)
+        i = dot + 1 + length
+        if i < len(s) and s[i] == ",":
+            i += 1
+    return elements
+
+
+async def _guac_read_instr(reader: asyncio.StreamReader) -> str:
+    """Read one complete Guacamole instruction (up to and including ';')."""
+    data = await reader.readuntil(b";")
+    return data.decode("utf-8", errors="replace")
+
+
+async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, session: dict) -> None:
+    """Negotiate an RDP connection with guacd."""
+    writer.write(_guac_encode("select", "rdp").encode())
+    await writer.drain()
+
+    args_instr = await _guac_read_instr(reader)
+    elements = _guac_parse_instr(args_instr)
+    param_names = elements[1:]  # first element is opcode "args"
+
+    writer.write(_guac_encode("size", "1280", "800", "96").encode())
+    writer.write(_guac_encode("audio").encode())
+    writer.write(_guac_encode("video").encode())
+    writer.write(_guac_encode("image", "image/png", "image/jpeg").encode())
+    await writer.drain()
+
+    rdp_defaults: dict = {
+        "hostname": session["host"],
+        "port": str(session["port"]),
+        "username": session["username"],
+        "password": session["password"],
+        "width": "1280",
+        "height": "800",
+        "dpi": "96",
+        "color-depth": "16",
+        "security": "any",
+        "ignore-cert": "true",
+        "client-name": "rcommander",
+        "enable-font-smoothing": "true",
+        "enable-wallpaper": "false",
+        "enable-theming": "false",
+        "enable-full-window-drag": "false",
+        "enable-desktop-composition": "false",
+        "enable-menu-animations": "false",
+    }
+    connect_args = [rdp_defaults.get(p, "") for p in param_names]
+    writer.write(_guac_encode("connect", *connect_args).encode())
+    await writer.drain()
+
+
+_RDP_PAGE_TMPL = """\
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>RDP — %%NAME%%</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000; display:flex; flex-direction:column; height:100vh; font-family:system-ui,sans-serif; overflow:hidden; }
+#bar { background:#161b22; border-bottom:1px solid #30363d; padding:8px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0; color:#e6edf3; font-size:13px; }
+#status { margin-left:auto; font-size:12px; color:#8b949e; }
+#display { flex:1; overflow:hidden; position:relative; cursor:none; }
+#display div { width:100% !important; height:100% !important; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2">
+    <rect x="2" y="3" width="20" height="14" rx="2"/>
+    <line x1="8" y1="21" x2="16" y2="21"/>
+    <line x1="12" y1="17" x2="12" y2="21"/>
+  </svg>
+  RDP — %%NAME%%
+  <span id="status">Connecting…</span>
+</div>
+<div id="display"></div>
+<script src="https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/guacamole-common.min.js"></script>
+<script>
+(function() {
+  var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  var wsUrl = proto + '://' + location.host + '/ws/rdp/%%TOKEN%%';
+  var status = document.getElementById('status');
+
+  var tunnel = new Guacamole.WebSocketTunnel(wsUrl);
+  var client = new Guacamole.Client(tunnel);
+
+  var displayDiv = document.getElementById('display');
+  displayDiv.appendChild(client.getDisplay().getElement());
+
+  client.onerror = function(err) {
+    status.textContent = 'Error: ' + (err.message || 'Connection failed');
+    status.style.color = '#f85149';
+  };
+
+  tunnel.onstatechange = function(state) {
+    if (state === Guacamole.Tunnel.State.OPEN) {
+      status.textContent = 'Connected';
+      status.style.color = '#3fb950';
+    } else if (state === Guacamole.Tunnel.State.CLOSED) {
+      if (status.style.color !== 'rgb(248, 81, 73)') {
+        status.textContent = 'Disconnected';
+        status.style.color = '#f85149';
+      }
+    }
+  };
+
+  client.connect();
+  window.onunload = function() { client.disconnect(); };
+
+  var display = client.getDisplay();
+  var mouse = new Guacamole.Mouse(display.getElement());
+  mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = function(state) {
+    client.sendMouseState(state);
+  };
+
+  var keyboard = new Guacamole.Keyboard(document);
+  keyboard.onkeydown = function(keysym) { client.sendKeyEvent(1, keysym); };
+  keyboard.onkeyup = function(keysym) { client.sendKeyEvent(0, keysym); };
+
+  function scaleDisplay() {
+    var w = displayDiv.clientWidth;
+    var h = displayDiv.clientHeight;
+    var dw = display.getWidth();
+    var dh = display.getHeight();
+    if (dw && dh) {
+      display.scale(Math.min(w / dw, h / dh));
+    }
+  }
+  window.addEventListener('resize', scaleDisplay);
+  display.onresize = scaleDisplay;
+})();
+</script>
+</body>
+</html>"""
+
+
+def _rdp_page(token: str, name: str) -> str:
+    safe = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return _RDP_PAGE_TMPL.replace("%%TOKEN%%", token).replace("%%NAME%%", safe)
+
 
 app = FastAPI(title="RCommander")
 
@@ -625,6 +794,12 @@ class VncSessionIn(BaseModel):
     port: int = 5900
 
 
+class RdpSessionIn(BaseModel):
+    server_id: int
+    credential_id: int
+    port: int = 3389
+
+
 @app.post("/api/vnc-session")
 def create_vnc_session(data: VncSessionIn):
     _prune_vnc_sessions()
@@ -700,26 +875,90 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         pass
 
 
-@app.get("/api/rdp-file")
-def rdp_file(server_id: int, credential_id: int, port: int = 3389):
+@app.post("/api/rdp-session")
+def create_rdp_session(data: RdpSessionIn):
+    _prune_rdp_sessions()
     with Session() as db:
-        server = db.get(ServerRow, server_id)
-        cred = db.get(CredentialRow, credential_id)
-        if not server or not cred:
-            raise HTTPException(404, "Server or credential not found")
-    content = (
-        f"full address:s:{server.host}:{port}\r\n"
-        f"username:s:{cred.username}\r\n"
-        "prompt for credentials:i:0\r\n"
-        "authentication level:i:2\r\n"
-        "redirectclipboard:i:1\r\n"
-        "redirectprinters:i:0\r\n"
-    )
-    return Response(
-        content=content.encode(),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{server.name}.rdp"'},
-    )
+        server = db.get(ServerRow, data.server_id)
+        cred = db.get(CredentialRow, data.credential_id) if data.credential_id else None
+        if not server:
+            raise HTTPException(404, "Server not found")
+        token = secrets.token_urlsafe(16)
+        _rdp_sessions[token] = {
+            "host": server.host,
+            "port": data.port,
+            "username": cred.username if cred else "",
+            "password": cred.password if cred else "",
+            "name": server.name,
+            "ts": time.time(),
+        }
+    return {"token": token}
+
+
+@app.get("/rdp/{token}", response_class=HTMLResponse)
+def rdp_session_page(token: str):
+    session = _rdp_sessions.get(token)
+    if not session:
+        return HTMLResponse("<h1 style='font-family:sans-serif;padding:2rem'>Session expired or not found.</h1>", status_code=404)
+    return HTMLResponse(_rdp_page(token, session["name"]))
+
+
+@app.websocket("/ws/rdp/{token}")
+async def rdp_ws_proxy(websocket: WebSocket, token: str):
+    session = _rdp_sessions.get(token)
+    if not session:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept(subprotocol="guacamole")
+
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", 4822)
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    try:
+        await _guac_handshake(reader, writer, session)
+    except Exception:
+        writer.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    async def ws_to_tcp():
+        try:
+            while True:
+                msg = await websocket.receive_text()
+                writer.write(msg.encode())
+                await writer.drain()
+        except Exception:
+            pass
+
+    async def tcp_to_ws():
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                await websocket.send_text(data.decode("utf-8", errors="replace"))
+        except Exception:
+            pass
+
+    tasks = [asyncio.ensure_future(ws_to_tcp()), asyncio.ensure_future(tcp_to_ws())]
+    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for t in tasks:
+        t.cancel()
+    writer.close()
+    try:
+        await websocket.close()
+    except Exception:
+        pass
 
 
 # ── Health & static ───────────────────────────────────────────────────────────

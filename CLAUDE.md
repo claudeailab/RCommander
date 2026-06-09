@@ -40,7 +40,7 @@
 - **CSV import** — bulk-import servers from a CSV file
 - **Clone server** — duplicate an existing server as a starting point
 - **Responsive** — works on desktop and mobile
-- **Remote Access** — connect to servers via VNC (in-browser session) or RDP (downloads a pre-filled .rdp file)
+- **Remote Access** — connect to servers via VNC (in-browser noVNC session) or RDP (full in-browser session powered by Apache Guacamole)
 - **SQLite persistence** — single-file database stored under `/data`
 
 ## docker-compose.yml template
