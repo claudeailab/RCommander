@@ -1,12 +1,15 @@
+import asyncio
 import io
 import json
 import os
+import secrets
+import time
 from typing import Literal, Optional
 
 import paramiko
 import winrm
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import Column, Integer, String, Text, create_engine, or_, text
@@ -93,6 +96,75 @@ def _migrate():
 _migrate()
 
 APP_VERSION = "1.3.4"
+
+# ── VNC session store (short-lived, in-memory) ────────────────────────────────
+_vnc_sessions: dict = {}
+
+
+def _prune_vnc_sessions() -> None:
+    cutoff = time.time() - 300  # 5-minute TTL
+    for k in [k for k, v in _vnc_sessions.items() if v["ts"] < cutoff]:
+        del _vnc_sessions[k]
+
+
+_VNC_PAGE_TMPL = """\
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>VNC — %%NAME%%</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; flex-direction: column; height: 100vh; font-family: system-ui, sans-serif; }
+#bar { background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 16px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; color: #e6edf3; font-size: 13px; }
+#status { margin-left: auto; font-size: 12px; }
+#vnc { flex: 1; overflow: hidden; }
+#vnc > div, #vnc canvas { width: 100% !important; height: 100% !important; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2">
+    <rect x="2" y="3" width="20" height="14" rx="2"/>
+    <line x1="8" y1="21" x2="16" y2="21"/>
+    <line x1="12" y1="17" x2="12" y2="21"/>
+  </svg>
+  VNC — %%NAME%%
+  <span id="status" style="color:#8b949e">Connecting…</span>
+</div>
+<div id="vnc"><div id="t"></div></div>
+<script type="module">
+import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js';
+const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+const url = proto + '://' + location.host + '/ws/vnc/%%TOKEN%%';
+const rfb = new RFB(document.getElementById('t'), url, { credentials: { password: %%PW%% } });
+rfb.scaleViewport = true;
+rfb.resizeSession = true;
+rfb.addEventListener('connect', () => {
+  const s = document.getElementById('status');
+  s.textContent = 'Connected'; s.style.color = '#3fb950';
+});
+rfb.addEventListener('disconnect', ev => {
+  const s = document.getElementById('status');
+  s.textContent = ev.detail.clean ? 'Disconnected' : 'Connection lost';
+  s.style.color = '#f85149';
+});
+rfb.addEventListener('credentialsrequired', () => {
+  rfb.sendCredentials({ password: prompt('VNC Password:') || '' });
+});
+</script>
+</body>
+</html>"""
+
+
+def _vnc_page(token: str, name: str, password: str) -> str:
+    safe = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        _VNC_PAGE_TMPL
+        .replace("%%TOKEN%%", token)
+        .replace("%%PW%%", json.dumps(password))
+        .replace("%%NAME%%", safe)
+    )
 
 app = FastAPI(title="RCommander")
 
@@ -541,6 +613,113 @@ def execute(req: ExecuteRequest):
             yield _sse({"type": "done"})
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+# ── Health & static ───────────────────────────────────────────────────────────
+
+# ── Remote Access ─────────────────────────────────────────────────────────────
+
+class VncSessionIn(BaseModel):
+    server_id: int
+    credential_id: int
+    port: int = 5900
+
+
+@app.post("/api/vnc-session")
+def create_vnc_session(data: VncSessionIn):
+    _prune_vnc_sessions()
+    with Session() as db:
+        server = db.get(ServerRow, data.server_id)
+        cred = db.get(CredentialRow, data.credential_id)
+        if not server or not cred:
+            raise HTTPException(404, "Server or credential not found")
+        token = secrets.token_urlsafe(16)
+        _vnc_sessions[token] = {
+            "host": server.host,
+            "port": data.port,
+            "password": cred.password or "",
+            "name": server.name,
+            "ts": time.time(),
+        }
+    return {"token": token}
+
+
+@app.get("/vnc/{token}", response_class=HTMLResponse)
+def vnc_session_page(token: str):
+    session = _vnc_sessions.get(token)
+    if not session:
+        return HTMLResponse("<h1 style='font-family:sans-serif;padding:2rem'>Session expired or not found.</h1>", status_code=404)
+    return HTMLResponse(_vnc_page(token, session["name"], session["password"]))
+
+
+@app.websocket("/ws/vnc/{token}")
+async def vnc_ws_proxy(websocket: WebSocket, token: str):
+    session = _vnc_sessions.pop(token, None)
+    if not session:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept(subprotocol="binary")
+
+    try:
+        reader, writer = await asyncio.open_connection(session["host"], session["port"])
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    async def ws_to_tcp():
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                writer.write(data)
+                await writer.drain()
+        except Exception:
+            pass
+
+    async def tcp_to_ws():
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                await websocket.send_bytes(data)
+        except Exception:
+            pass
+
+    tasks = [asyncio.ensure_future(ws_to_tcp()), asyncio.ensure_future(tcp_to_ws())]
+    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for t in tasks:
+        t.cancel()
+    writer.close()
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+
+@app.get("/api/rdp-file")
+def rdp_file(server_id: int, credential_id: int, port: int = 3389):
+    with Session() as db:
+        server = db.get(ServerRow, server_id)
+        cred = db.get(CredentialRow, credential_id)
+        if not server or not cred:
+            raise HTTPException(404, "Server or credential not found")
+    content = (
+        f"full address:s:{server.host}:{port}\r\n"
+        f"username:s:{cred.username}\r\n"
+        "prompt for credentials:i:0\r\n"
+        "authentication level:i:2\r\n"
+        "redirectclipboard:i:1\r\n"
+        "redirectprinters:i:0\r\n"
+    )
+    return Response(
+        content=content.encode(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{server.name}.rdp"'},
+    )
 
 
 # ── Health & static ───────────────────────────────────────────────────────────
