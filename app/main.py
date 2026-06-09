@@ -287,59 +287,73 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
 </div>
 <div id="display"></div>
 <script type="module">
-import Guacamole from '/guacamole-common.js';
-(function() {
-  var proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  var wsUrl = proto + '://' + location.host + '/ws/rdp/%%TOKEN%%';
-  var status = document.getElementById('status');
-
-  var tunnel = new Guacamole.WebSocketTunnel(wsUrl);
-  var client = new Guacamole.Client(tunnel);
-
-  var displayDiv = document.getElementById('display');
-  displayDiv.appendChild(client.getDisplay().getElement());
-
-  client.onerror = function(err) {
-    status.textContent = 'Error: ' + (err.message || 'Connection failed');
+(async function() {
+  const status = document.getElementById('status');
+  let Guacamole;
+  try {
+    const mod = await import('/guacamole-common.js');
+    Guacamole = mod.default;
+    if (!Guacamole || !Guacamole.WebSocketTunnel) throw new Error('Guacamole.WebSocketTunnel not found in module');
+  } catch(e) {
+    status.textContent = 'Library error: ' + e.message;
     status.style.color = '#f85149';
-  };
+    return;
+  }
+  try {
+    var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    var wsUrl = proto + '://' + location.host + '/ws/rdp/%%TOKEN%%';
 
-  tunnel.onstatechange = function(state) {
-    if (state === Guacamole.Tunnel.State.OPEN) {
-      status.textContent = 'Connected';
-      status.style.color = '#3fb950';
-    } else if (state === Guacamole.Tunnel.State.CLOSED) {
-      if (status.style.color !== 'rgb(248, 81, 73)') {
-        status.textContent = 'Disconnected';
-        status.style.color = '#f85149';
+    var tunnel = new Guacamole.WebSocketTunnel(wsUrl);
+    var client = new Guacamole.Client(tunnel);
+
+    var displayDiv = document.getElementById('display');
+    displayDiv.appendChild(client.getDisplay().getElement());
+
+    client.onerror = function(err) {
+      status.textContent = 'Error: ' + (err.message || 'Connection failed');
+      status.style.color = '#f85149';
+    };
+
+    tunnel.onstatechange = function(state) {
+      if (state === Guacamole.Tunnel.State.OPEN) {
+        status.textContent = 'Connected';
+        status.style.color = '#3fb950';
+      } else if (state === Guacamole.Tunnel.State.CLOSED) {
+        if (status.style.color !== 'rgb(248, 81, 73)') {
+          status.textContent = 'Disconnected';
+          status.style.color = '#f85149';
+        }
+      }
+    };
+
+    client.connect();
+    window.onunload = function() { client.disconnect(); };
+
+    var display = client.getDisplay();
+    var mouse = new Guacamole.Mouse(display.getElement());
+    mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = function(mouseState) {
+      client.sendMouseState(mouseState);
+    };
+
+    var keyboard = new Guacamole.Keyboard(document);
+    keyboard.onkeydown = function(keysym) { client.sendKeyEvent(1, keysym); };
+    keyboard.onkeyup = function(keysym) { client.sendKeyEvent(0, keysym); };
+
+    function scaleDisplay() {
+      var w = displayDiv.clientWidth;
+      var h = displayDiv.clientHeight;
+      var dw = display.getWidth();
+      var dh = display.getHeight();
+      if (dw && dh) {
+        display.scale(Math.min(w / dw, h / dh));
       }
     }
-  };
-
-  client.connect();
-  window.onunload = function() { client.disconnect(); };
-
-  var display = client.getDisplay();
-  var mouse = new Guacamole.Mouse(display.getElement());
-  mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = function(state) {
-    client.sendMouseState(state);
-  };
-
-  var keyboard = new Guacamole.Keyboard(document);
-  keyboard.onkeydown = function(keysym) { client.sendKeyEvent(1, keysym); };
-  keyboard.onkeyup = function(keysym) { client.sendKeyEvent(0, keysym); };
-
-  function scaleDisplay() {
-    var w = displayDiv.clientWidth;
-    var h = displayDiv.clientHeight;
-    var dw = display.getWidth();
-    var dh = display.getHeight();
-    if (dw && dh) {
-      display.scale(Math.min(w / dw, h / dh));
-    }
+    window.addEventListener('resize', scaleDisplay);
+    display.onresize = scaleDisplay;
+  } catch(e) {
+    status.textContent = 'JS error: ' + e.message;
+    status.style.color = '#f85149';
   }
-  window.addEventListener('resize', scaleDisplay);
-  display.onresize = scaleDisplay;
 })();
 </script>
 </body>
