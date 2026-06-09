@@ -1,15 +1,23 @@
-FROM python:3.12-slim-bookworm
+FROM ubuntu:24.04
 
-ENV PYTHONUNBUFFERED=1 \
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-dev \
+    python3.12-venv \
+    python3-pip \
     gcc \
     libkrb5-dev \
     guacd \
     && rm -rf /var/lib/apt/lists/*
+
+RUN python3.12 -m venv /venv
+ENV PATH="/venv/bin:$PATH"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
