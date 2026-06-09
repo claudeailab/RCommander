@@ -8,7 +8,7 @@ from typing import Literal, Optional
 
 import paramiko
 import winrm
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -35,6 +35,8 @@ class ServerRow(Base):
     description = Column(Text, default="")
     credential_id = Column(Integer, nullable=True)
     server_group = Column(String, default="")
+    vnc_dsm_file_id = Column(Integer, nullable=True)
+    vnc_client_key_file_id = Column(Integer, nullable=True)
 
 
 class CredentialRow(Base):
@@ -70,15 +72,29 @@ class FolderCredentialRow(Base):
     credential_id = Column(Integer, nullable=False)
 
 
+class VncFileRow(Base):
+    __tablename__ = "vnc_files"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+    file_type = Column(String, nullable=False, default="other")  # dsm | client_key | server_pubkey | other
+    original_name = Column(String, nullable=False)
+    description = Column(Text, default="")
+
+
 Base.metadata.create_all(engine)
+
+VNC_FILES_DIR = "/data/vnc-files"
+os.makedirs(VNC_FILES_DIR, exist_ok=True)
 
 
 def _migrate():
     """Add columns introduced after initial release without dropping existing data."""
     migrations = {
-        "servers":     [("description",   "TEXT NOT NULL DEFAULT ''"),
-                        ("credential_id", "INTEGER"),
-                        ("server_group",  "TEXT NOT NULL DEFAULT ''")],
+        "servers":     [("description",           "TEXT NOT NULL DEFAULT ''"),
+                        ("credential_id",          "INTEGER"),
+                        ("server_group",           "TEXT NOT NULL DEFAULT ''"),
+                        ("vnc_dsm_file_id",        "INTEGER"),
+                        ("vnc_client_key_file_id", "INTEGER")],
         "credentials": [("description",   "TEXT NOT NULL DEFAULT ''")],
         "commands":    [("description",   "TEXT NOT NULL DEFAULT ''"),
                         ("server_id",     "INTEGER"),
@@ -95,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -270,7 +286,7 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
   <span id="status">Connecting…</span>
 </div>
 <div id="display"></div>
-<script src="https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/guacamole-common.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/src/main/webapp/guacamole.js"></script>
 <script>
 (function() {
   var proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -348,6 +364,8 @@ class ServerIn(BaseModel):
     description: str = ""
     credential_id: Optional[int] = None
     server_group: str = ""
+    vnc_dsm_file_id: Optional[int] = None
+    vnc_client_key_file_id: Optional[int] = None
 
 
 class CredentialIn(BaseModel):
@@ -959,6 +977,56 @@ async def rdp_ws_proxy(websocket: WebSocket, token: str):
         await websocket.close()
     except Exception:
         pass
+
+
+# ── VNC Files ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/vnc-files", status_code=201)
+async def upload_vnc_file(
+    name: str = Form(...),
+    file_type: str = Form("other"),
+    description: str = Form(""),
+    file: UploadFile = File(...),
+):
+    content = await file.read()
+    with Session() as db:
+        row = VncFileRow(
+            name=name,
+            file_type=file_type,
+            original_name=file.filename or name,
+            description=description,
+        )
+        db.add(row)
+        try:
+            db.commit()
+            db.refresh(row)
+        except Exception:
+            db.rollback()
+            raise HTTPException(409, "Name already exists")
+        dest = os.path.join(VNC_FILES_DIR, f"{row.id}.bin")
+        with open(dest, "wb") as f:
+            f.write(content)
+        return {c.name: getattr(row, c.name) for c in row.__table__.columns}
+
+
+@app.get("/api/vnc-files")
+def list_vnc_files():
+    with Session() as db:
+        return [{c.name: getattr(r, c.name) for c in r.__table__.columns}
+                for r in db.query(VncFileRow).order_by(VncFileRow.name).all()]
+
+
+@app.delete("/api/vnc-files/{file_id}", status_code=204)
+def delete_vnc_file(file_id: int):
+    with Session() as db:
+        row = db.get(VncFileRow, file_id)
+        if not row:
+            raise HTTPException(404, "Not found")
+        db.delete(row)
+        db.commit()
+    path = os.path.join(VNC_FILES_DIR, f"{file_id}.bin")
+    if os.path.exists(path):
+        os.remove(path)
 
 
 # ── Health & static ───────────────────────────────────────────────────────────

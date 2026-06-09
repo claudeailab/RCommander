@@ -568,6 +568,10 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       <span class="nav-label">Remote Access</span>
     </div>
+    <div class="nav-item" data-tab="vnc-files">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+      <span class="nav-label">VNC Files</span>
+    </div>
   </nav>
 </div>
 
@@ -597,6 +601,10 @@
     <div class="mobile-nav-item" data-tab="remote-access">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       Remote
+    </div>
+    <div class="mobile-nav-item" data-tab="vnc-files">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      VNC Files
     </div>
   </div>
 </div>
@@ -850,8 +858,64 @@
         </button>
       </div>
       <div style="margin-top:12px;font-size:12px;color:var(--muted);line-height:1.6">
-        <strong style="color:var(--text)">VNC</strong> — opens an in-browser session in a new tab<br>
-        <strong style="color:var(--text)">RDP</strong> — downloads a <code>.rdp</code> file; open it with your local RDP client
+        <strong style="color:var(--text)">VNC</strong> — opens an in-browser noVNC session in a new tab<br>
+        <strong style="color:var(--text)">RDP</strong> — opens a full in-browser RDP session in a new tab (powered by Apache Guacamole)
+      </div>
+    </div>
+  </div>
+
+  <!-- VNC FILES -->
+  <div id="tab-vnc-files" style="display:none">
+    <div class="topbar">
+      <span class="page-title">VNC Files</span>
+    </div>
+    <div class="content" style="max-width:700px">
+      <div class="card" style="padding:20px;margin-bottom:16px">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">Upload File</div>
+        <div class="form-group">
+          <label>Name</label>
+          <input id="vf-name" placeholder="My DSM Plugin">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Type</label>
+            <select id="vf-type">
+              <option value="dsm">DSM Plugin (.dsm)</option>
+              <option value="client_key">Client Key (.pkey)</option>
+              <option value="server_pubkey">Server Public Key (.pubkey)</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>File</label>
+            <input id="vf-file" type="file">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input id="vf-desc" placeholder="Optional">
+        </div>
+        <button class="btn btn-primary" onclick="uploadVncFile()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Upload
+        </button>
+      </div>
+      <div class="card">
+        <table class="mobile-stack">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Original Filename</th>
+              <th class="col-desc">Description</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="vnc-files-body"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--muted);line-height:1.6">
+        Upload UltraVNC authentication files here. Associate <strong style="color:var(--text)">DSM Plugin</strong> and <strong style="color:var(--text)">Client Key</strong> files with servers in the Servers tab.
       </div>
     </div>
   </div>
@@ -868,7 +932,7 @@
 <div class="toast-container" id="toasts"></div>
 
 <script>
-const state = { servers: [], credentials: [], commands: [], groups: [], folderCredentials: [] };
+const state = { servers: [], credentials: [], commands: [], groups: [], folderCredentials: [], vncFiles: [] };
 
 const overlay  = document.getElementById('overlay');
 const modalBox = document.getElementById('modal-box');
@@ -890,13 +954,14 @@ async function api(method, path, body) {
 }
 
 async function loadAll() {
-  const [servers, credentials, commands, groups, folderCredentials, versionData] = await Promise.all([
+  const [servers, credentials, commands, groups, folderCredentials, versionData, vncFiles] = await Promise.all([
     api('GET', '/api/servers'),
     api('GET', '/api/credentials'),
     api('GET', '/api/commands'),
     api('GET', '/api/groups'),
     api('GET', '/api/folder-credentials'),
     api('GET', '/api/version'),
+    api('GET', '/api/vnc-files'),
   ]);
   const vEl = document.getElementById('app-version');
   if (vEl && versionData?.version) vEl.textContent = 'v' + versionData.version;
@@ -905,6 +970,7 @@ async function loadAll() {
   state.commands          = commands;
   state.groups            = groups;
   state.folderCredentials = folderCredentials;
+  state.vncFiles          = vncFiles;
   renderServers();
   renderCredentials();
   renderCommands();
@@ -912,6 +978,7 @@ async function loadAll() {
   renderBulkTree();
   refreshBulkCmdDropdown();
   renderRemoteAccess();
+  renderVncFiles();
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -1497,6 +1564,26 @@ function openModal(type, id = null, defaultGroup = '') {
         <label>Description</label>
         <input id="f-desc" value="${escape(src?.description ?? '')}" placeholder="Optional">
       </div>
+      <div class="form-group" id="vnc-file-fields">
+        <label style="color:var(--accent-h)">VNC Authentication Files</label>
+        <div class="form-row" style="margin-top:6px">
+          <div class="form-group">
+            <label>DSM Plugin File</label>
+            <select id="f-vnc-dsm">
+              <option value="">— none —</option>
+              ${state.vncFiles.filter(f=>f.file_type==='dsm').map(f=>`<option value="${f.id}" ${src?.vnc_dsm_file_id===f.id?'selected':''}>${escape(f.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Client Key File</label>
+            <select id="f-vnc-client-key">
+              <option value="">— none —</option>
+              ${state.vncFiles.filter(f=>f.file_type==='client_key').map(f=>`<option value="${f.id}" ${src?.vnc_client_key_file_id===f.id?'selected':''}>${escape(f.name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="hint">Used for UltraVNC SecureVNC / client authentication. Upload files under VNC Files.</div>
+      </div>
       ${modalFooter('saveServer')}`;
   }
 
@@ -1621,9 +1708,13 @@ async function saveEntity(resource, label, body) {
 
 async function saveServer() {
   const credVal = document.getElementById('f-credential')?.value;
+  const dsmVal = document.getElementById('f-vnc-dsm')?.value;
+  const ckVal = document.getElementById('f-vnc-client-key')?.value;
   const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22,
     type: val('f-type'), description: val('f-desc'), server_group: val('f-group'),
-    credential_id: credVal ? parseInt(credVal) : null };
+    credential_id: credVal ? parseInt(credVal) : null,
+    vnc_dsm_file_id: dsmVal ? parseInt(dsmVal) : null,
+    vnc_client_key_file_id: ckVal ? parseInt(ckVal) : null };
   if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
   await saveEntity('servers', 'Server', body);
 }
@@ -2513,6 +2604,63 @@ async function connectRemoteAccess() {
       toast('RDP error: ' + e.message, 'fail');
     }
   }
+}
+
+// ── VNC Files ─────────────────────────────────────────────────────────────────
+
+const VNC_FILE_TYPE_LABELS = { dsm: 'DSM Plugin', client_key: 'Client Key', server_pubkey: 'Server Pubkey', other: 'Other' };
+
+function renderVncFiles() {
+  const tbody = document.getElementById('vnc-files-body');
+  if (!tbody) return;
+  if (!state.vncFiles.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--muted)">No files uploaded yet</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = state.vncFiles.map(f => `
+    <tr>
+      <td>${escape(f.name)}</td>
+      <td><span class="badge">${escape(VNC_FILE_TYPE_LABELS[f.file_type] || f.file_type)}</span></td>
+      <td style="font-size:12px;color:var(--muted)">${escape(f.original_name)}</td>
+      <td class="col-desc" style="color:var(--muted)">${escape(f.description)}</td>
+      <td style="text-align:right">
+        <button class="btn btn-ghost btn-sm" onclick="deleteVncFile(${f.id})">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+        </button>
+      </td>
+    </tr>`).join('');
+}
+
+async function uploadVncFile() {
+  const name = document.getElementById('vf-name').value.trim();
+  const fileType = document.getElementById('vf-type').value;
+  const desc = document.getElementById('vf-desc').value.trim();
+  const fileInput = document.getElementById('vf-file');
+  if (!name) { toast('Name is required', 'fail'); return; }
+  if (!fileInput.files.length) { toast('Select a file to upload', 'fail'); return; }
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('file_type', fileType);
+  fd.append('description', desc);
+  fd.append('file', fileInput.files[0]);
+  try {
+    const res = await fetch('/api/vnc-files', { method: 'POST', body: fd });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || res.statusText); }
+    document.getElementById('vf-name').value = '';
+    document.getElementById('vf-desc').value = '';
+    fileInput.value = '';
+    await loadAll();
+    toast('File uploaded');
+  } catch(e) { toast(e.message, 'fail'); }
+}
+
+async function deleteVncFile(id) {
+  if (!confirm('Delete this VNC file?')) return;
+  try {
+    await api('DELETE', `/api/vnc-files/${id}`);
+    await loadAll();
+    toast('File deleted');
+  } catch(e) { toast(e.message, 'fail'); }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
