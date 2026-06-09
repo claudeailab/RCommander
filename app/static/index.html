@@ -564,6 +564,10 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="3" y1="21" x2="21" y2="21"/></svg>
       <span class="nav-label">Execute (Multiple)</span>
     </div>
+    <div class="nav-item" data-tab="remote-access">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      <span class="nav-label">Remote Access</span>
+    </div>
   </nav>
 </div>
 
@@ -589,6 +593,10 @@
     <div class="mobile-nav-item" data-tab="bulk-execute">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="3" y1="21" x2="21" y2="21"/></svg>
       Multiple
+    </div>
+    <div class="mobile-nav-item" data-tab="remote-access">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      Remote
     </div>
   </div>
 </div>
@@ -809,6 +817,44 @@
       <div id="bulk-results" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:none"></div>
     </div>
   </div>
+
+  <!-- REMOTE ACCESS -->
+  <div id="tab-remote-access" style="display:none">
+    <div class="topbar"><span class="page-title">Remote Access</span></div>
+    <div class="content" style="max-width:500px">
+      <div class="form-group">
+        <label>Server</label>
+        <select id="ra-server"></select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Protocol</label>
+          <select id="ra-protocol" onchange="raProtocolChange()">
+            <option value="vnc">VNC</option>
+            <option value="rdp">RDP</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Port</label>
+          <input id="ra-port" type="number" value="5900" style="width:100%">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Credentials</label>
+        <select id="ra-credential"></select>
+      </div>
+      <div style="margin-top:8px">
+        <button class="btn btn-run" onclick="connectRemoteAccess()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          Connect
+        </button>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--muted);line-height:1.6">
+        <strong style="color:var(--text)">VNC</strong> — opens an in-browser session in a new tab<br>
+        <strong style="color:var(--text)">RDP</strong> — downloads a <code>.rdp</code> file; open it with your local RDP client
+      </div>
+    </div>
+  </div>
 </main>
 
 <!-- Modal overlay -->
@@ -865,6 +911,7 @@ async function loadAll() {
   refreshExecuteDropdowns();
   renderBulkTree();
   refreshBulkCmdDropdown();
+  renderRemoteAccess();
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -2422,6 +2469,45 @@ async function runBulkServer(server, cmd, outEl) {
       read();
     }).catch(reject);
   });
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+// ── Remote Access ─────────────────────────────────────────────────────────────
+
+function renderRemoteAccess() {
+  const serverSel = document.getElementById('ra-server');
+  const credSel = document.getElementById('ra-credential');
+  if (!serverSel || !credSel) return;
+  const sv = serverSel.value, cv = credSel.value;
+  serverSel.innerHTML = '<option value="">— select server —</option>' +
+    state.servers.map(s => `<option value="${s.id}" ${s.id == sv ? 'selected' : ''}>${escape(s.name)} (${escape(s.host)})</option>`).join('');
+  credSel.innerHTML = '<option value="">— select credential —</option>' +
+    state.credentials.map(c => `<option value="${c.id}" ${c.id == cv ? 'selected' : ''}>${escape(c.name)}</option>`).join('');
+}
+
+function raProtocolChange() {
+  const proto = document.getElementById('ra-protocol').value;
+  document.getElementById('ra-port').value = proto === 'rdp' ? '3389' : '5900';
+}
+
+async function connectRemoteAccess() {
+  const serverId = document.getElementById('ra-server').value;
+  const credId = document.getElementById('ra-credential').value;
+  const protocol = document.getElementById('ra-protocol').value;
+  const port = parseInt(document.getElementById('ra-port').value) || (protocol === 'rdp' ? 3389 : 5900);
+  if (!serverId) { toast('Select a server', 'fail'); return; }
+  if (!credId) { toast('Select credentials', 'fail'); return; }
+  if (protocol === 'vnc') {
+    try {
+      const data = await api('POST', '/api/vnc-session', { server_id: +serverId, credential_id: +credId, port });
+      window.open('/vnc/' + data.token, '_blank');
+    } catch (e) {
+      toast('VNC error: ' + e.message, 'fail');
+    }
+  } else {
+    window.location.href = `/api/rdp-file?server_id=${serverId}&credential_id=${credId}&port=${port}`;
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ A self-hosted web UI for running commands on remote servers over SSH (Linux/Mac)
 - **CSV import** — bulk-import servers from a CSV file
 - **Clone server** — duplicate an existing server as a starting point
 - **Responsive** — works on desktop and mobile
+- **Remote Access** — connect to servers via VNC (in-browser session) or RDP (downloads a pre-filled .rdp file)
 - **SQLite persistence** — single-file database stored under `/data`
 
 ## Quick Start
