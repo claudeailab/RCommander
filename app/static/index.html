@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>RCommander</title>
 <link rel="icon" type="image/x-icon" href="/favicon.ico">
 <style>
@@ -200,6 +200,38 @@
   #exec-folder-path { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
   #exec-folder-path:empty { display: none; }
   .exec-folder-sel { width: 100%; }
+  /* ── Custom command select ── */
+  .cmd-select { position: relative; width: 100%; }
+  .cmd-select-trigger {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; color: var(--text); font-size: 14px;
+    cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; user-select: none; transition: border-color .15s;
+  }
+  .cmd-select-trigger:hover { border-color: var(--muted); }
+  .cmd-select-trigger svg { flex-shrink: 0; color: var(--muted); }
+  .cmd-select-menu {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    z-index: 200; max-height: 320px; overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    flex-direction: column; display: none;
+  }
+  .cmd-select-menu.open { display: flex; }
+  .cmd-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .cmd-search {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+    padding: 5px 9px; color: var(--text); font-size: 13px; outline: none;
+  }
+  .cmd-search:focus { border-color: var(--blue); }
+  .cmd-select-opts { overflow-y: auto; flex: 1; }
+  .cmd-select-opt {
+    padding: 8px 12px; cursor: pointer; display: flex; align-items: center;
+    gap: 8px; font-size: 13px; color: var(--text);
+  }
+  .cmd-select-opt:hover { background: #1a2030; }
+  .cmd-select-opt.is-placeholder { color: var(--muted); }
+  .cmd-select-opt.is-selected { background: rgba(56,139,253,.12); }
   .terminal {
     background: #010409;
     border: 1px solid var(--border);
@@ -214,12 +246,23 @@
     flex-direction: column;
     gap: 0;
   }
-  .terminal-line { line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
-  .terminal-line.stdout { color: #c9d1d9; }
-  .terminal-line.stderr { color: #f85149; }
-  .terminal-line.meta   { color: #58a6ff; font-style: italic; }
-  .terminal-line.success{ color: #56d364; }
-  .terminal-line.err    { color: #f85149; font-weight: bold; }
+  .terminal-line { line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #c9d1d9; }
+  .terminal-line.meta    { color: #58a6ff; font-style: italic; }
+  .terminal-line.err     { color: #f85149; font-weight: bold; }
+  /* ANSI colour spans */
+  .an-b  { font-weight: bold }
+  .an-d  { opacity: .55 }
+  .an-i  { font-style: italic }
+  .an-u  { text-decoration: underline }
+  .an-30 { color:#4d4d4d } .an-31 { color:#f85149 } .an-32 { color:#56d364 }
+  .an-33 { color:#e3b341 } .an-34 { color:#79c0ff } .an-35 { color:#d2a8ff }
+  .an-36 { color:#56d4dd } .an-37 { color:#c9d1d9 } .an-39 { color:#c9d1d9 }
+  .an-90 { color:#6e7681 } .an-91 { color:#ff7b72 } .an-92 { color:#3fb950 }
+  .an-93 { color:#d29922 } .an-94 { color:#58a6ff } .an-95 { color:#bc8cff }
+  .an-96 { color:#76e3ea } .an-97 { color:#f0f6fc }
+  .an-bg40{background:#4d4d4d}.an-bg41{background:#f85149}.an-bg42{background:#56d364}
+  .an-bg43{background:#e3b341}.an-bg44{background:#79c0ff}.an-bg45{background:#d2a8ff}
+  .an-bg46{background:#56d4dd}.an-bg47{background:#c9d1d9}
   .terminal-placeholder { color: var(--muted); font-style: italic; margin: auto; text-align: center; }
   .spinner {
     display: inline-block;
@@ -282,12 +325,13 @@
     border-radius: 6px;
     color: var(--text);
     padding: 8px 10px;
-    font-size: 13px;
+    font-size: 16px; /* ≥16px prevents iOS/Android auto-zoom on focus */
     font-family: inherit;
     width: 100%;
     transition: border-color .15s;
     outline: none;
   }
+  input[type="checkbox"], input[type="radio"] { width: auto; padding: 0; border: none; background: none; }
   input:focus, select:focus, textarea:focus { border-color: var(--blue); }
   textarea { font-family: 'SF Mono', monospace; resize: vertical; min-height: 80px; }
   select option { background: var(--surface); }
@@ -391,8 +435,10 @@
   .folder-node:hover { background: #1f2937; }
   .folder-node.f-selected { background: #1c3a5e; color: #58a6ff; }
   .folder-node.f-none { color: var(--muted); font-style: italic; }
-  /* m-sub is a mobile-only second line; hide it on desktop */
-  table.mobile-stack td.m-sub { display: none; }
+  /* m-sub is visible on desktop as a compact table cell */
+  table.mobile-stack td.m-sub { white-space: nowrap; }
+  /* Description column: shrinks to content, no unbounded expansion */
+  th.col-desc, td.col-desc { width: 1%; }
   /* m-only elements are hidden on desktop, shown inline on mobile */
   .m-only { display: none; }
   @media (max-width: 768px) {
@@ -406,8 +452,8 @@
     .topbar { padding: 12px 16px; }
     /* Hide description column on small screens */
     .col-desc { display: none; }
-    /* Hide button labels on small screens, show only icons */
     .btn-label { display: none; }
+    .btn-mobile-hide { display: none; }
     /* Prevent table overflow — wrap long content instead of scrolling */
     .card { overflow-x: hidden; }
     td code { white-space: pre-wrap; word-break: break-all; }
@@ -423,14 +469,16 @@
     }
     table.mobile-stack tbody tr:not(.group-header):last-child { border-bottom: none; }
     table.mobile-stack tbody td { border: none; padding: 0; }
-    table.mobile-stack td.m-name    { flex: 1; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    table.mobile-stack td.m-sub     { display: block; flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    table.mobile-stack td.m-name    { flex: 1; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; order: 1; }
+    table.mobile-stack td.m-sub     { display: block; flex: 0 0 100%; font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; order: 3; }
     table.mobile-stack td.m-meta    { display: none; }
-    table.mobile-stack td.m-actions { flex: 0 0 auto; }
+    table.mobile-stack td.m-actions { flex: 0 0 auto; order: 2; width: auto; }
     table.mobile-stack td.col-desc  { display: none; }
     table.mobile-stack td.col-desktop { display: none; }
-    .m-only { display: inline; }
+    .m-only { display: block; margin-left: 0 !important; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cred-username { flex: 0 0 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   }
+  td.m-actions { width: 1%; white-space: nowrap; }
   /* ── Locked server indicator ── */
   .server-locked-note {
     font-size: 11px;
@@ -442,12 +490,11 @@
   select:disabled, select[disabled] { opacity: 0.45; cursor: not-allowed; }
 
   /* ── Bulk Execute ── */
-  .bulk-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-  .bulk-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
-  .bulk-tree { height: 340px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; margin-top: 8px; background: var(--bg); }
-  .bulk-item { display: flex; align-items: center; gap: 7px; padding: 5px 10px; font-size: 13px; user-select: none; }
-  .bulk-item:hover { background: #1a2030; }
-  .bulk-item input[type=checkbox] { cursor: pointer; accent-color: var(--accent-h); flex-shrink: 0; }
+  .bulk-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .bulk-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; min-width: 0; }
+  .bulk-tree { height: 420px; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--border); border-radius: 6px; margin-top: 8px; background: var(--bg); width: 100%; box-sizing: border-box; }
+  .bulk-row { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg); user-select: none; cursor: default; }
+  .bulk-row:hover { background: #1a2030; }
   .bulk-result-row { border-bottom: 1px solid var(--border); }
   .bulk-result-hdr { display: flex; align-items: center; gap: 10px; padding: 8px 16px; cursor: pointer; font-size: 13px; }
   .bulk-result-hdr:hover { background: #1a2030; }
@@ -494,7 +541,7 @@
 <div class="sidebar">
   <div class="logo">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M6 8l3 3-3 3"/><path d="M13 14h4"/></svg>
-    RCommander
+    <span style="flex:1;display:flex;align-items:baseline;gap:6px">RCommander<span id="app-version" style="font-size:10px;font-weight:400;color:var(--muted)"></span></span>
   </div>
   <nav>
     <div class="nav-item active" data-tab="servers">
@@ -515,7 +562,11 @@
     </div>
     <div class="nav-item" data-tab="bulk-execute">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="3" y1="21" x2="21" y2="21"/></svg>
-      <span class="nav-label">Execute (Bulk)</span>
+      <span class="nav-label">Execute (Multiple)</span>
+    </div>
+    <div class="nav-item" data-tab="remote-access">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      <span class="nav-label">Remote Access</span>
     </div>
   </nav>
 </div>
@@ -541,7 +592,11 @@
     </div>
     <div class="mobile-nav-item" data-tab="bulk-execute">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="3" y1="21" x2="21" y2="21"/></svg>
-      Bulk
+      Multiple
+    </div>
+    <div class="mobile-nav-item" data-tab="remote-access">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      Remote
     </div>
   </div>
 </div>
@@ -559,7 +614,7 @@
             <span class="btn-label">More</span>
           </button>
           <div class="dropdown-menu">
-            <button class="dropdown-item" onclick="closeDropdowns();openNewFolderModal('')">
+            <button class="dropdown-item" onclick="closeDropdowns();openNewFolderModal()">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
               New Folder
             </button>
@@ -620,8 +675,7 @@
           <thead>
             <tr>
               <th>Name</th>
-              <th>Username</th>
-              <th>Auth</th>
+              <th style="white-space:nowrap">Auth</th>
               <th class="col-desc">Description</th>
               <th></th>
             </tr>
@@ -679,9 +733,21 @@
           </div>
           <div>
             <h3>COMMAND</h3>
-            <select id="exec-command" onchange="onExecCommandChange()">
-              <option value="">— select command —</option>
-            </select>
+            <input type="hidden" id="exec-command" value="">
+            <div class="cmd-select" id="exec-cmd-custom">
+              <div class="cmd-select-trigger" onclick="toggleCmdSelect()">
+                <span id="exec-cmd-label" style="color:var(--muted)">— select command —</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="cmd-select-menu" id="exec-cmd-menu"></div>
+            </div>
+            <div id="exec-command-server-badge" style="display:none;margin-top:6px;font-size:12px;color:var(--muted);display:none;align-items:center;gap:8px">
+              <span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                Locked to: <span id="exec-command-server-name" style="color:#58a6ff;font-weight:500"></span>
+              </span>
+              <button onclick="resetExecSelection()" style="background:none;border:1px solid var(--warn);color:var(--warn);border-radius:5px;padding:2px 9px;font-size:11px;cursor:pointer;font-weight:600;letter-spacing:.3px">✕ Unlock</button>
+            </div>
           </div>
           <button class="btn btn-run" id="run-btn" onclick="runCommand()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -700,7 +766,7 @@
   <!-- BULK EXECUTE -->
   <div id="tab-bulk-execute" style="display:none">
     <div class="topbar">
-      <span class="page-title">Execute (Bulk)</span>
+      <span class="page-title">Execute (Multiple)</span>
     </div>
     <div class="content">
       <div class="bulk-layout">
@@ -708,8 +774,10 @@
         <div class="bulk-panel">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <h3 style="margin:0">SERVERS</h3>
-            <div style="display:flex;gap:6px">
-              <button class="btn btn-ghost" onclick="bulkSelectAll()" style="font-size:12px;padding:3px 10px">All</button>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn btn-ghost" onclick="bulkExpandAll()" style="font-size:12px;padding:3px 10px">Expand All</button>
+              <button class="btn btn-ghost" onclick="bulkCollapseAll()" style="font-size:12px;padding:3px 10px">Collapse All</button>
+              <button class="btn btn-ghost" onclick="bulkSelectAll()" style="font-size:12px;padding:3px 10px">Select All</button>
               <button class="btn btn-ghost" onclick="bulkClearAll()" style="font-size:12px;padding:3px 10px">Clear</button>
             </div>
           </div>
@@ -749,6 +817,44 @@
       <div id="bulk-results" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:none"></div>
     </div>
   </div>
+
+  <!-- REMOTE ACCESS -->
+  <div id="tab-remote-access" style="display:none">
+    <div class="topbar"><span class="page-title">Remote Access</span></div>
+    <div class="content" style="max-width:500px">
+      <div class="form-group">
+        <label>Server</label>
+        <select id="ra-server"></select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Protocol</label>
+          <select id="ra-protocol" onchange="raProtocolChange()">
+            <option value="vnc">VNC</option>
+            <option value="rdp">RDP</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Port</label>
+          <input id="ra-port" type="number" value="5900" style="width:100%">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Credentials</label>
+        <select id="ra-credential"></select>
+      </div>
+      <div style="margin-top:8px">
+        <button class="btn btn-run" onclick="connectRemoteAccess()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          Connect
+        </button>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--muted);line-height:1.6">
+        <strong style="color:var(--text)">VNC</strong> — opens an in-browser session in a new tab<br>
+        <strong style="color:var(--text)">RDP</strong> — downloads a <code>.rdp</code> file; open it with your local RDP client
+      </div>
+    </div>
+  </div>
 </main>
 
 <!-- Modal overlay -->
@@ -762,7 +868,7 @@
 <div class="toast-container" id="toasts"></div>
 
 <script>
-const state = { servers: [], credentials: [], commands: [], groups: [] };
+const state = { servers: [], credentials: [], commands: [], groups: [], folderCredentials: [] };
 
 const overlay  = document.getElementById('overlay');
 const modalBox = document.getElementById('modal-box');
@@ -784,22 +890,28 @@ async function api(method, path, body) {
 }
 
 async function loadAll() {
-  const [servers, credentials, commands, groups] = await Promise.all([
+  const [servers, credentials, commands, groups, folderCredentials, versionData] = await Promise.all([
     api('GET', '/api/servers'),
     api('GET', '/api/credentials'),
     api('GET', '/api/commands'),
     api('GET', '/api/groups'),
+    api('GET', '/api/folder-credentials'),
+    api('GET', '/api/version'),
   ]);
-  state.servers     = servers;
-  state.credentials = credentials;
-  state.commands    = commands;
-  state.groups      = groups;
+  const vEl = document.getElementById('app-version');
+  if (vEl && versionData?.version) vEl.textContent = 'v' + versionData.version;
+  state.servers           = servers;
+  state.credentials       = credentials;
+  state.commands          = commands;
+  state.groups            = groups;
+  state.folderCredentials = folderCredentials;
   renderServers();
   renderCredentials();
   renderCommands();
   refreshExecuteDropdowns();
   renderBulkTree();
   refreshBulkCmdDropdown();
+  renderRemoteAccess();
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -883,6 +995,17 @@ function _pickerNodeHTML(nodes, path, selectedPath, indent) {
 
 const _expandedGroups = new Set();
 
+function getEffectiveCredential(server) {
+  if (server.credential_id) return { id: server.credential_id, inherited: false };
+  const parts = (server.server_group || '').split('/').filter(Boolean);
+  for (let i = parts.length; i > 0; i--) {
+    const path = parts.slice(0, i).join('/');
+    const fc = state.folderCredentials.find(f => f.path === path);
+    if (fc?.credential_id) return { id: fc.credential_id, inherited: true, from: path };
+  }
+  return null;
+}
+
 function renderServers() {
   const tbody = document.getElementById('servers-body');
   const q = (document.getElementById('server-filter')?.value ?? '').toLowerCase();
@@ -925,15 +1048,23 @@ function renderServers() {
     nodes[s.server_group].servers.push(s);
   }
 
+  const indent = window.innerWidth <= 768 ? 8 : 16;
+
   const serverRow = (s, depth = 0) => {
-    const cred = credMap.get(s.credential_id);
-    const nameStyle = depth > 0 ? ` style="padding-left:${16 + depth * 16}px"` : '';
+    const eff = getEffectiveCredential(s);
+    const effCred = eff ? credMap.get(eff.id) : null;
+    const credCell = effCred
+      ? (eff.inherited
+          ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px;opacity:.7;border-style:dashed" title="Inherited from folder: ${escape(eff.from)}">${escape(effCred.name)} ↑</span>`
+          : `<span class="badge badge-key" style="font-size:10px;padding:1px 5px">${escape(effCred.name)}</span>`)
+      : '<span style="color:var(--muted);font-size:12px">—</span>';
+    const nameStyle = depth > 0 ? ` style="padding-left:${indent + depth * indent}px"` : '';
     return `<tr>
       <td class="m-name"${nameStyle}><strong>${escape(s.name)}</strong><code class="m-only" style="color:var(--blue);font-size:12px;font-weight:normal;margin-left:8px">${escape(s.host)}</code></td>
       <td class="col-desktop" style="color:var(--blue);font-size:13px"><code>${escape(s.host)}</code></td>
       <td class="col-desktop" style="color:var(--muted);font-size:12px">${escape(s.port)}</td>
       <td class="col-desktop"><span class="badge badge-${s.type}" style="font-size:10px;padding:1px 5px">${s.type.toUpperCase()}</span></td>
-      <td class="col-desktop">${cred ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px">${escape(cred.name)}</span>` : '<span style="color:var(--muted);font-size:12px">—</span>'}</td>
+      <td class="col-desktop">${credCell}</td>
       <td class="col-desc" style="color:var(--muted)">${escape(s.description)}</td>
       <td class="m-actions">
         <div class="actions">
@@ -964,19 +1095,24 @@ function renderServers() {
     const label = path.split('/').pop();
     const collapsed = !_expandedGroups.has(path);
     const icon = collapsed ? '▶' : '▼';
-    const padLeft = 16 + depth * 16;
+    const padLeft = indent + depth * indent;
     let html = `<tr class="group-header" data-group="${escape(path)}" style="cursor:pointer;background:#111820;user-select:none">
       <td colspan="7" style="padding:7px 16px 7px ${padLeft}px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px">
         <span style="display:flex;align-items:center;justify-content:space-between">
-          <span>
-            <span style="margin-right:8px;font-size:10px">${icon}</span>
-            ${escape(label)} <span style="font-weight:400;margin-left:6px">(${countAll(path)})</span>
+          <span style="display:flex;align-items:center;gap:8px;min-width:0">
+            <span style="margin-right:4px;font-size:10px">${icon}</span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(label)} <span style="font-weight:400">(${countAll(path)})</span></span>
+            ${(() => { const fc = state.folderCredentials.find(f => f.path === path); const fc_cred = fc ? credMap.get(fc.credential_id) : null; return fc_cred ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px;flex-shrink:0">${escape(fc_cred.name)}</span>` : ''; })()}
           </span>
-          <span style="display:flex;gap:6px">
-            <button class="icon-btn" style="font-size:11px" data-action="new-sub" data-group="${escape(path)}">+ Sub</button>
-            <button class="icon-btn" style="font-size:11px" data-action="move" data-group="${escape(path)}">Move</button>
-            <button class="icon-btn" style="font-size:11px" data-action="rename" data-group="${escape(path)}">Rename</button>
-            <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">Delete</button>
+          <span style="display:flex;gap:6px;align-items:center">
+              <button class="icon-btn" style="font-size:11px" data-action="edit-folder" data-group="${escape(path)}">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                <span class="btn-label">Edit</span>
+              </button>
+              <button class="icon-btn del" style="font-size:11px" data-action="delete" data-group="${escape(path)}">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                <span class="btn-label">Delete</span>
+              </button>
           </span>
         </span>
       </td>
@@ -1005,10 +1141,8 @@ function renderServers() {
     tr.addEventListener('click', e => {
       const btn = e.target.closest('button[data-action]');
       if (btn) {
-        if (btn.dataset.action === 'rename') openRenameGroupModal(btn.dataset.group);
-        else if (btn.dataset.action === 'new-sub') openNewFolderModal(btn.dataset.group);
-        else if (btn.dataset.action === 'move') openMoveGroupModal(btn.dataset.group);
-        else deleteGroup(btn.dataset.group);
+        if (btn.dataset.action === 'edit-folder') openEditFolderModal(btn.dataset.group);
+        else if (btn.dataset.action === 'delete') deleteGroup(btn.dataset.group);
         return;
       }
       toggleGroup(tr.dataset.group);
@@ -1040,6 +1174,8 @@ function renderCredentials() {
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
+      <td class="m-sub" style="display:flex;align-items:center;gap:8px;min-width:0"><code class="cred-username">${escape(c.username)}</code>${badge}</td>
+      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
       <td class="m-actions">
         <div class="actions">
           <button class="icon-btn" title="Edit" onclick="openModal('credential',${c.id})">
@@ -1052,8 +1188,6 @@ function renderCredentials() {
           </button>
         </div>
       </td>
-      <td class="m-sub"><code>${escape(c.username)}</code> <span style="margin-left:4px">${badge}</span></td>
-      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
     </tr>`;
   }).join('');
 }
@@ -1073,9 +1207,16 @@ function renderCommands() {
     const serverBadge = linkedServer
       ? `<span class="badge" style="background:#1c3a5e;color:#58a6ff;font-size:10px;padding:1px 6px;margin-left:6px" title="Locked to this server">${escape(linkedServer.name)}</span>`
       : '';
+    const shellBadge = c.shell_type === 'powershell'
+      ? `<span class="badge" style="background:#2d1f4e;color:#a78bfa;font-size:10px;padding:1px 6px;margin-left:6px" title="PowerShell">PS</span>`
+      : c.shell_type === 'sh'
+      ? `<span class="badge" style="background:#0d2b1f;color:#3fb950;font-size:10px;padding:1px 6px;margin-left:6px" title="SH / bash">SH</span>`
+      : `<span class="badge" style="background:#1e1e1e;color:#8b949e;font-size:10px;padding:1px 6px;margin-left:6px" title="CMD / Windows batch">CMD</span>`;
     return `
     <tr>
-      <td class="m-name"><strong>${escape(c.name)}</strong>${serverBadge}</td>
+      <td class="m-name"><strong>${escape(c.name)}</strong>${serverBadge}${shellBadge}</td>
+      <td class="m-sub" style="max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><code style="color:var(--warn);font-size:12px">${escape(c.command)}</code></td>
+      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
       <td class="m-actions">
         <div class="actions">
           <button class="icon-btn" title="Edit" onclick="openModal('command',${c.id})">
@@ -1088,8 +1229,6 @@ function renderCommands() {
           </button>
         </div>
       </td>
-      <td class="m-sub"><code style="color:var(--warn);font-size:12px;white-space:pre-wrap;word-break:break-all">${escape(c.command)}</code></td>
-      <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
     </tr>`;
   }).join('');
 }
@@ -1165,21 +1304,73 @@ function _updateExecServerOptions() {
   }
 }
 
+function _renderCmdSelect(selectedId) {
+  const serverMap = new Map(state.servers.map(s => [s.id, s]));
+  const menu = document.getElementById('exec-cmd-menu');
+  const label = document.getElementById('exec-cmd-label');
+  if (!menu || !label) return;
+  const selCmd = selectedId ? state.commands.find(c => c.id == selectedId) : null;
+  const selServer = selCmd?.server_id ? serverMap.get(selCmd.server_id) : null;
+  if (selCmd) {
+    label.style.color = '';
+    label.innerHTML = escape(selCmd.name) + (selServer
+      ? ` <span class="badge" style="background:#1c3a5e;color:#58a6ff;font-size:10px;padding:1px 6px">${escape(selServer.name)}</span>`
+      : '');
+  } else {
+    label.style.color = 'var(--muted)';
+    label.textContent = '— select command —';
+  }
+  menu.innerHTML =
+    `<div class="cmd-search-wrap"><input class="cmd-search" id="exec-cmd-search" placeholder="Search…" autocomplete="off" oninput="_filterCmdSelect()" onclick="event.stopPropagation()"></div>` +
+    `<div class="cmd-select-opts" id="exec-cmd-opts"></div>`;
+  _filterCmdSelect('', selectedId);
+}
+
+function _filterCmdSelect(query, selectedId) {
+  const serverMap = new Map(state.servers.map(s => [s.id, s]));
+  const input = document.getElementById('exec-cmd-search');
+  const opts  = document.getElementById('exec-cmd-opts');
+  if (!opts) return;
+  const q = (query !== undefined ? query : (input ? input.value : '')).toLowerCase();
+  const sel = selectedId !== undefined ? selectedId : document.getElementById('exec-command').value;
+  const filtered = state.commands.filter(c =>
+    !q || c.name.toLowerCase().includes(q) ||
+    (c.server_id && serverMap.get(c.server_id)?.name.toLowerCase().includes(q))
+  );
+  opts.innerHTML =
+    (!q ? `<div class="cmd-select-opt is-placeholder ${!sel ? 'is-selected' : ''}" data-value="">— select command —</div>` : '') +
+    (filtered.length
+      ? filtered.map(c => {
+          const sv = c.server_id ? serverMap.get(c.server_id) : null;
+          const badge = sv ? `<span class="badge" style="background:#1c3a5e;color:#58a6ff;font-size:10px;padding:1px 6px">${escape(sv.name)}</span>` : '';
+          return `<div class="cmd-select-opt ${c.id == sel ? 'is-selected' : ''}" data-value="${c.id}">${escape(c.name)}${badge}</div>`;
+        }).join('')
+      : `<div class="cmd-select-opt is-placeholder" style="pointer-events:none">No results</div>`
+    );
+}
+
+function toggleCmdSelect() {
+  const menu = document.getElementById('exec-cmd-menu');
+  const isOpen = menu.classList.contains('open');
+  menu.classList.toggle('open');
+  if (!isOpen) {
+    const input = document.getElementById('exec-cmd-search');
+    if (input) { input.value = ''; _filterCmdSelect(''); setTimeout(() => input.focus(), 0); }
+  }
+}
+
 function refreshExecuteDropdowns() {
-  const sel = (id, items, label) => {
-    const el = document.getElementById(id);
-    const cur = el.value;
-    el.innerHTML = `<option value="">— ${label} —</option>` +
-      items.map(i => `<option value="${i.id}" ${i.id==cur?'selected':''}>${escape(i.name)}</option>`).join('');
-  };
   _renderExecFolderPath();
-  sel('exec-command', state.commands, 'select command');
+  const curCmd = document.getElementById('exec-command').value;
+  _renderCmdSelect(curCmd);
 }
 
 // ── Dropdown menus ────────────────────────────────────────────────────────────
 
 function toggleDropdown(id) {
-  const menu = document.querySelector(`#${id} .dropdown-menu`);
+  const container = document.getElementById(id);
+  const menu = container && container.querySelector('.dropdown-menu');
+  if (!menu) return;
   const isOpen = menu.classList.contains('open');
   closeDropdowns();
   if (!isOpen) menu.classList.add('open');
@@ -1191,6 +1382,21 @@ function closeDropdowns() {
 
 document.addEventListener('click', e => {
   if (!e.target.closest('.dropdown')) closeDropdowns();
+  if (!e.target.closest('.cmd-select')) {
+    document.querySelectorAll('.cmd-select-menu.open').forEach(m => m.classList.remove('open'));
+  }
+});
+
+document.getElementById('exec-cmd-menu').addEventListener('click', e => {
+  const opt = e.target.closest('.cmd-select-opt');
+  if (!opt) return;
+  const val = opt.dataset.value || '';
+  document.getElementById('exec-command').value = val;
+  document.getElementById('exec-cmd-menu').classList.remove('open');
+  const search = document.getElementById('exec-cmd-search');
+  if (search) search.value = '';
+  _renderCmdSelect(val);
+  onExecCommandChange();
 });
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -1338,6 +1544,15 @@ function openModal(type, id = null, defaultGroup = '') {
         <textarea id="f-command" rows="3" placeholder="df -h">${escape(c?.command ?? '')}</textarea>
       </div>
       <div class="form-group">
+        <label>Shell Type</label>
+        <select id="f-shell-type">
+          <option value="sh" ${c?.shell_type === 'sh' ? 'selected' : ''}>SH (bash/shell)</option>
+          <option value="cmd" ${(c?.shell_type ?? 'cmd') === 'cmd' ? 'selected' : ''}>CMD (Windows batch)</option>
+          <option value="powershell" ${c?.shell_type === 'powershell' ? 'selected' : ''}>PowerShell</option>
+        </select>
+        <div class="hint">SH for SSH servers; CMD or PowerShell for WinRM (Windows) servers</div>
+      </div>
+      <div class="form-group">
         <label>Default Server</label>
         <select id="f-server-id">
           <option value="">— any server —</option>
@@ -1423,7 +1638,8 @@ async function saveCredential() {
 async function saveCommand() {
   const serverIdVal = document.getElementById('f-server-id')?.value;
   const body = { name: val('f-name'), command: document.getElementById('f-command')?.value?.trim() ?? '',
-    description: val('f-desc'), server_id: serverIdVal ? parseInt(serverIdVal) : null };
+    description: val('f-desc'), server_id: serverIdVal ? parseInt(serverIdVal) : null,
+    shell_type: document.getElementById('f-shell-type')?.value ?? 'cmd' };
   if (!body.name || !body.command) { toast('Name and Command are required', 'fail'); return; }
   await saveEntity('commands', 'Command', body);
 }
@@ -1447,18 +1663,33 @@ function onExecCommandChange() {
   const serverSel = document.getElementById('exec-server');
   const folderPath = document.getElementById('exec-folder-path');
   const lockedNote = document.getElementById('exec-server-locked-note');
+  const cmdBadge = document.getElementById('exec-command-server-badge');
+  const cmdBadgeName = document.getElementById('exec-command-server-name');
 
   if (cmd?.server_id) {
-    // Lock server selectors to the command's linked server
+    const linkedServer = state.servers.find(s => s.id === cmd.server_id);
+    // Navigate folder path to where the locked server lives so it appears in the dropdown
+    _execPath = linkedServer?.server_group || null;
+    _renderExecFolderPath();
     serverSel.value = cmd.server_id;
     serverSel.disabled = true;
     folderPath.querySelectorAll('select').forEach(s => s.disabled = true);
     lockedNote.classList.add('visible');
+    cmdBadgeName.textContent = linkedServer ? linkedServer.name : cmd.server_id;
+    cmdBadge.style.display = 'flex';
   } else {
     serverSel.disabled = false;
     folderPath.querySelectorAll('select').forEach(s => s.disabled = false);
     lockedNote.classList.remove('visible');
+    cmdBadge.style.display = 'none';
   }
+  _renderCmdSelect(cmdId);
+}
+
+function resetExecSelection() {
+  document.getElementById('exec-command').value = '';
+  document.getElementById('exec-server').value = '';
+  onExecCommandChange();
 }
 
 let _running = false;
@@ -1471,8 +1702,9 @@ async function runCommand() {
   if (!serverId || !cmdId) { toast('Select server and command', 'fail'); return; }
 
   const server = state.servers.find(s => s.id == serverId);
-  const credId = server?.credential_id;
-  if (!credId) { toast('Server has no credentials configured', 'fail'); return; }
+  const effCred = server ? getEffectiveCredential(server) : null;
+  const credId = effCred?.id;
+  if (!credId) { toast('No credentials configured for this server or its folder', 'fail'); return; }
   const cmd = state.commands.find(c => c.id == cmdId);
 
   _term = document.getElementById('terminal');
@@ -1531,11 +1763,58 @@ async function runCommand() {
   }
 }
 
+// Convert ANSI escape codes to HTML spans
+function ansiToHtml(raw) {
+  // Drop cursor-movement, erase, and other non-colour sequences first
+  // eslint-disable-next-line no-control-regex
+  let s = raw.replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]/g, m => {
+    // keep only SGR (ends with 'm')
+    return m.endsWith('m') ? m : '';
+  });
+  // Drop remaining non-SGR escape sequences
+  // eslint-disable-next-line no-control-regex
+  s = s.replace(/\x1b[^[]/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  // Escape HTML entities
+  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  // Parse SGR sequences into open/close spans
+  const classes = [];
+  let out = '';
+  // eslint-disable-next-line no-control-regex
+  const parts = s.split(/(\x1b\[\d*(?:;\d+)*m)/);
+  for (const part of parts) {
+    // eslint-disable-next-line no-control-regex
+    if (/^\x1b\[/.test(part)) {
+      const codes = part.slice(2, -1).split(';').map(Number);
+      for (const code of codes) {
+        if (code === 0 || code === '') {
+          // reset — close all open spans
+          out += '</span>'.repeat(classes.length);
+          classes.length = 0;
+        } else if (code === 1)  { classes.push('an-b');  out += '<span class="an-b">'; }
+        else if (code === 2)    { classes.push('an-d');  out += '<span class="an-d">'; }
+        else if (code === 3)    { classes.push('an-i');  out += '<span class="an-i">'; }
+        else if (code === 4)    { classes.push('an-u');  out += '<span class="an-u">'; }
+        else if ((code>=30&&code<=39)||(code>=90&&code<=97)) {
+          classes.push('an-'+code); out += `<span class="an-${code}">`;
+        } else if (code>=40&&code<=47) {
+          classes.push('an-bg'+code); out += `<span class="an-bg${code}">`;
+        }
+      }
+    } else {
+      out += part;
+    }
+  }
+  // close any unclosed spans
+  out += '</span>'.repeat(classes.length);
+  return out;
+}
+
 function appendTerm(cls, text) {
   const term = _term ?? document.getElementById('terminal');
   const div = document.createElement('div');
   div.className = `terminal-line ${cls}`;
-  div.textContent = text;
+  div.innerHTML = ansiToHtml(text);
   term.appendChild(div);
   term.scrollTop = term.scrollHeight;
 }
@@ -1552,26 +1831,55 @@ function toast(msg, type = 'ok') {
 
 // ── Folder actions ────────────────────────────────────────────────────────────
 
-function openNewFolderModal(parentPath) {
-  const title = parentPath ? `New Subfolder in "${parentPath}"` : 'New Folder';
+function _folderDestTree(excludePath, selectedDest) {
+  const prefix = excludePath ? excludePath + '/' : null;
+  const { nodes, roots } = buildFolderNodes();
+  function nodeHTML(path, indent) {
+    if (excludePath && (path === excludePath || path.startsWith(prefix))) return '';
+    const label = path.split('/').pop();
+    const children = [...(nodes[path] || new Set())].filter(c => !excludePath || (c !== excludePath && !c.startsWith(prefix))).sort();
+    const padLeft = 12 + indent * 16;
+    return `<div class="folder-node${path === selectedDest ? ' f-selected' : ''}" data-dest="${escape(path)}" style="padding-left:${padLeft}px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      ${escape(label)}</div>` + children.map(c => nodeHTML(c, indent + 1)).join('');
+  }
+  const validRoots = [...roots].filter(r => !excludePath || (r !== excludePath && !r.startsWith(prefix)));
+  return validRoots.sort().map(r => nodeHTML(r, 0)).join('');
+}
+
+function openNewFolderModal() {
+  let parentValue = '';
   modalBox.innerHTML = `
-    ${modalHeader(title)}
+    ${modalHeader('New Folder')}
     <div class="form-group">
       <label>Folder Name</label>
       <input id="f-new-folder-name" placeholder="Folder name">
     </div>
+    <div class="form-group">
+      <label>Parent Folder <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+      <div class="folder-tree" id="f-new-folder-tree" style="max-height:180px">
+        <div class="folder-node f-selected" data-dest="" style="padding-left:12px">(root level)</div>
+        ${_folderDestTree('', '')}
+      </div>
+    </div>
     ${modalFooter('_saveNewFolder')}`;
-  const inp = modalBox.querySelector('#f-new-folder-name');
-  inp.dataset.parent = parentPath;
-  inp.addEventListener('keydown', e => { if (e.key === 'Enter') _saveNewFolder(); });
+  const tree = modalBox.querySelector('#f-new-folder-tree');
+  tree.addEventListener('click', e => {
+    const node = e.target.closest('[data-dest]');
+    if (!node) return;
+    parentValue = node.dataset.dest;
+    tree.querySelectorAll('.folder-node').forEach(n => n.classList.remove('f-selected'));
+    node.classList.add('f-selected');
+  });
+  modalBox.querySelector('#f-new-folder-name').addEventListener('keydown', e => { if (e.key === 'Enter') _saveNewFolder(); });
+  modalBox._getParent = () => parentValue;
   showModal('#f-new-folder-name');
 }
 
 async function _saveNewFolder() {
-  const input = document.getElementById('f-new-folder-name');
-  const name = input?.value?.trim();
+  const name = document.getElementById('f-new-folder-name')?.value?.trim();
   if (!name) { toast('Name cannot be empty', 'fail'); return; }
-  const parent = input.dataset.parent;
+  const parent = modalBox._getParent?.() ?? '';
   const path = parent ? parent + '/' + name : name;
   try {
     await api('POST', '/api/groups', { path });
@@ -1579,98 +1887,67 @@ async function _saveNewFolder() {
   } catch(e) { toast(e.message, 'fail'); }
 }
 
-
-
-function openRenameGroupModal(fullPath) {
+function openEditFolderModal(fullPath) {
   const parts = fullPath.split('/');
-  const label = parts.pop();
+  const leafName = parts.pop();
   const parentPath = parts.join('/');
+  const fc = state.folderCredentials.find(f => f.path === fullPath);
+  let destValue = parentPath;
+
   modalBox.innerHTML = `
-    ${modalHeader('Rename Folder')}
-    ${parentPath ? `<div class="hint" style="margin-bottom:4px">Inside: ${escape(parentPath)}</div>` : ''}
+    ${modalHeader(`Edit Folder`)}
     <div class="form-group">
-      <label>New Name</label>
-      <input id="f-group-name" value="${escape(label)}" placeholder="Folder name">
+      <label>Name</label>
+      <input id="f-folder-name" value="${escape(leafName)}" placeholder="Folder name">
     </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="f-rename-confirm">Rename</button>
-    </div>`;
-  document.getElementById('f-rename-confirm').addEventListener('click', () => {
-    const newLabel = document.getElementById('f-group-name')?.value?.trim();
-    if (!newLabel) { toast('Name cannot be empty', 'fail'); return; }
-    const newPath = parentPath ? parentPath + '/' + newLabel : newLabel;
-    api('PUT', '/api/groups/rename', { old_name: fullPath, new_name: newPath })
-      .then(() => { closeModal(); loadAll(); toast('Folder renamed'); })
-      .catch(e => toast(e.message, 'fail'));
-  });
-  overlay.classList.remove('hidden');
-  setTimeout(() => document.getElementById('f-group-name')?.select(), 50);
-}
-
-function openMoveGroupModal(fullPath) {
-  const leafName = fullPath.split('/').pop();
-  // Build list of valid destination folders: all groups except the folder itself and its descendants
-  const prefix = fullPath + '/';
-  const destinations = state.groups.filter(g => g !== fullPath && !g.startsWith(prefix));
-
-  let destValue = '';
-  const renderTree = () => {
-    const { nodes, roots } = buildFolderNodes();
-    // Filter out the folder being moved and its children from the picker
-    const validRoots = [...roots].filter(r => r !== fullPath && !r.startsWith(prefix));
-
-    function nodeHTML(path, indent) {
-      if (path === fullPath || path.startsWith(prefix)) return '';
-      const label = path.split('/').pop();
-      const selected = path === destValue;
-      const children = [...(nodes[path] || new Set())].filter(c => c !== fullPath && !c.startsWith(prefix)).sort();
-      const padLeft = 12 + indent * 16;
-      let h = `<div class="folder-node${selected ? ' f-selected' : ''}" data-dest="${escape(path)}" style="padding-left:${padLeft}px">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-        ${escape(label)}
-      </div>`;
-      for (const child of children) h += nodeHTML(child, indent + 1);
-      return h;
-    }
-    return validRoots.map(r => nodeHTML(r, 0)).join('');
-  };
-
-  modalBox.innerHTML = `
-    ${modalHeader(`Move "${escape(leafName)}" into…`)}
-    <div class="hint" style="margin-bottom:4px">Select a destination folder, or leave unselected to move to root level.</div>
-    <div class="folder-tree" id="move-dest-tree" style="max-height:260px">
-      <div class="folder-node f-selected" data-dest="" style="padding-left:12px">(root level)</div>
-      ${renderTree()}
+    <div class="form-group">
+      <label>Parent Folder</label>
+      <div class="folder-tree" id="f-edit-folder-tree" style="max-height:180px">
+        <div class="folder-node${!parentPath ? ' f-selected' : ''}" data-dest="" style="padding-left:12px">(root level)</div>
+        ${_folderDestTree(fullPath, parentPath)}
+      </div>
     </div>
-    <div class="hint" id="move-dest-hint">Destination: root level</div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="move-confirm-btn">Move</button>
-    </div>`;
+    <div class="form-group">
+      <label>Credential</label>
+      <select id="f-folder-cred">
+        <option value="">— none —</option>
+        ${state.credentials.map(c => `<option value="${c.id}" ${fc?.credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('')}
+      </select>
+      <div class="hint">All servers in this folder inherit this credential unless they have their own.</div>
+    </div>
+    ${modalFooter('_saveEditFolder')}`;
 
-  const tree = modalBox.querySelector('#move-dest-tree');
-  const hint = modalBox.querySelector('#move-dest-hint');
-
+  const tree = modalBox.querySelector('#f-edit-folder-tree');
   tree.addEventListener('click', e => {
     const node = e.target.closest('[data-dest]');
     if (!node) return;
     destValue = node.dataset.dest;
     tree.querySelectorAll('.folder-node').forEach(n => n.classList.remove('f-selected'));
     node.classList.add('f-selected');
-    hint.textContent = destValue ? `Destination: ${destValue}` : 'Destination: root level';
   });
+  modalBox._editFolderState = () => ({ fullPath, leafName, destValue: () => destValue });
+  showModal('#f-folder-name');
+  document.getElementById('f-folder-name').select();
+}
 
-  modalBox.querySelector('#move-confirm-btn').addEventListener('click', async () => {
-    const newPath = destValue ? destValue + '/' + leafName : leafName;
-    if (newPath === fullPath) { closeModal(); return; }
-    try {
+async function _saveEditFolder() {
+  const { fullPath, leafName: oldLeaf, destValue: getDest } = modalBox._editFolderState();
+  const newLeaf = document.getElementById('f-folder-name')?.value?.trim();
+  if (!newLeaf) { toast('Name cannot be empty', 'fail'); return; }
+  const newParent = getDest();
+  const newPath = newParent ? newParent + '/' + newLeaf : newLeaf;
+  const credId = document.getElementById('f-folder-cred')?.value;
+  try {
+    if (newPath !== fullPath) {
       await api('PUT', '/api/groups/rename', { old_name: fullPath, new_name: newPath });
-      closeModal(); await loadAll(); toast('Folder moved');
-    } catch(e) { toast(e.message, 'fail'); }
-  });
-
-  overlay.classList.remove('hidden');
+    }
+    if (credId) {
+      await api('PUT', `/api/folder-credentials/${newPath}`, { credential_id: +credId });
+    } else {
+      await api('DELETE', `/api/folder-credentials/${newPath}`).catch(() => {});
+    }
+    closeModal(); await loadAll(); toast('Folder saved');
+  } catch(e) { toast(e.message, 'fail'); }
 }
 
 async function deleteGroup(path) {
@@ -1853,121 +2130,118 @@ let _bulkSelected = new Set();
 let _bulkAbort = false;
 let _bulkRunning = false;
 
+function _buildBulkNodes() {
+  const nodes = {};
+  const roots = new Set();
+  for (const groupPath of state.groups) {
+    const parts = groupPath.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const path = parts.slice(0, i).join('/');
+      if (!nodes[path]) nodes[path] = { servers: [], children: new Set() };
+      if (i === 1) roots.add(path);
+      else nodes[parts.slice(0, i - 1).join('/')].children.add(path);
+    }
+  }
+  for (const s of state.servers.filter(s => s.server_group)) {
+    const parts = s.server_group.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const path = parts.slice(0, i).join('/');
+      if (!nodes[path]) nodes[path] = { servers: [], children: new Set() };
+      if (i === 1) roots.add(path);
+      else nodes[parts.slice(0, i - 1).join('/')].children.add(path);
+    }
+    nodes[s.server_group].servers.push(s);
+  }
+  return { nodes, roots };
+}
+
+function _bulkCountAll(path, nodes) {
+  if (!nodes[path]) return 0;
+  return nodes[path].servers.length + [...nodes[path].children].reduce((n, c) => n + _bulkCountAll(c, nodes), 0);
+}
+
+function _bulkGetAllServerIds(path, nodes) {
+  if (!nodes[path]) return [];
+  const ids = nodes[path].servers.map(s => s.id);
+  for (const c of nodes[path].children) ids.push(..._bulkGetAllServerIds(c, nodes));
+  return ids;
+}
+
 function renderBulkTree() {
   const query = (document.getElementById('bulk-server-search')?.value || '').toLowerCase().trim();
   const container = document.getElementById('bulk-tree');
   if (!container) return;
 
-  // Build flat list of matching servers
-  const servers = query
-    ? state.servers.filter(s => s.name.toLowerCase().includes(query) ||
-        (s.host || '').toLowerCase().includes(query) ||
-        (s.server_group || '').toLowerCase().includes(query))
-    : state.servers;
+  const { nodes, roots } = _buildBulkNodes();
 
   if (query) {
-    // Flat list when searching
-    container.innerHTML = servers.map(s => {
-      const checked = _bulkSelected.has(s.id);
-      return `<div class="bulk-item" style="padding-left:10px">
-        <input type="checkbox" data-bulk-server="${s.id}" ${checked ? 'checked' : ''} onchange="bulkServerCheck(${s.id},this.checked)">
-        <span>${escape(s.name)}</span>
-        <span style="color:var(--muted);font-size:11px">${escape(s.host || '')}</span>
-      </div>`;
-    }).join('');
+    const matched = state.servers.filter(s =>
+      s.name.toLowerCase().includes(query) ||
+      (s.host || '').toLowerCase().includes(query) ||
+      (s.server_group || '').toLowerCase().includes(query)
+    );
+    container.innerHTML = matched.length
+      ? matched.map(s => _bulkServerRowHTML(s, 0)).join('')
+      : `<div style="padding:16px;color:var(--muted);font-size:13px;text-align:center">No servers match</div>`;
+    container.querySelectorAll('input[data-bi]').forEach(cb => { cb.indeterminate = true; });
     _updateBulkCount();
     return;
   }
 
-  // Build group tree
-  const groups = {};
-  servers.forEach(s => {
-    const g = s.server_group || '';
-    if (!groups[g]) groups[g] = [];
-    groups[g].push(s);
-  });
-
-  // Collect all unique folder paths (including intermediate ones)
-  const allPaths = new Set();
-  Object.keys(groups).forEach(g => {
-    if (!g) return;
-    const parts = g.split('/');
-    for (let i = 1; i <= parts.length; i++) allPaths.add(parts.slice(0, i).join('/'));
-  });
-
-  const rootFolders = [...allPaths].filter(p => !p.includes('/'));
-  const rootServers = groups[''] || [];
-
-  function renderFolder(path) {
-    const depth = path.split('/').length;
-    const name = path.split('/').pop();
+  function folderRowHTML(path, depth) {
+    const label = path.split('/').pop();
     const expanded = _bulkExpanded.has(path);
-    const childPaths = [...allPaths].filter(p => {
-      const parts = p.split('/');
-      return parts.length === depth + 1 && p.startsWith(path + '/');
-    });
-    const directServers = groups[path] || [];
-
-    // Determine checkbox state
-    const allInside = _bulkGetAllServersUnder(path, groups, allPaths);
-    const checkedCount = allInside.filter(id => _bulkSelected.has(id)).length;
-    const isChecked = allInside.length > 0 && checkedCount === allInside.length;
-    const isIndeterminate = checkedCount > 0 && checkedCount < allInside.length;
-
-    let html = `<div class="bulk-item" style="padding-left:${(depth - 1) * 16 + 10}px">
-      <input type="checkbox" data-bulk-folder="${escape(path)}"
-        ${isChecked ? 'checked' : ''}
-        data-indeterminate="${isIndeterminate}"
-        onchange="bulkFolderCheck('${escape(path)}',this.checked)">
-      <span onclick="bulkToggleFolderExpand('${escape(path)}')" style="cursor:pointer;display:flex;align-items:center;gap:4px;font-weight:500">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;transform:${expanded ? 'rotate(90deg)' : ''}">
-          <polyline points="9 18 15 12 9 6"/>
-        </svg>
-        ${escape(name)}
-        <span style="color:var(--muted);font-size:11px;font-weight:400">(${allInside.length})</span>
-      </span>
+    const total = _bulkCountAll(path, nodes);
+    const allIds = _bulkGetAllServerIds(path, nodes);
+    const n = allIds.filter(id => _bulkSelected.has(id)).length;
+    const isChecked = allIds.length > 0 && n === allIds.length;
+    const isIndet = n > 0 && n < allIds.length;
+    const pl = 8 + depth * 16;
+    const icon = expanded ? '▼' : '▶';
+    let html = `<div class="bulk-row" style="padding:5px 8px 5px ${pl}px;cursor:pointer" onclick="bulkToggleFolderExpand('${escape(path)}')">
+      <input type="checkbox" ${isChecked ? 'checked' : ''} ${isIndet ? 'data-bi' : ''}
+        onclick="event.stopPropagation()" onchange="bulkFolderCheck('${escape(path)}',this.checked)"
+        style="flex-shrink:0;cursor:pointer;accent-color:var(--accent-h)">
+      <span style="flex-shrink:0;font-size:10px;color:var(--muted)">${icon}</span>
+      <strong style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(label)}</strong>
+      <span style="flex-shrink:0;color:var(--muted);font-size:11px">(${total})</span>
     </div>`;
-
     if (expanded) {
-      childPaths.sort().forEach(cp => { html += renderFolder(cp); });
-      directServers.forEach(s => {
-        const checked = _bulkSelected.has(s.id);
-        html += `<div class="bulk-item" style="padding-left:${depth * 16 + 10}px">
-          <input type="checkbox" data-bulk-server="${s.id}" ${checked ? 'checked' : ''} onchange="bulkServerCheck(${s.id},this.checked)">
-          <span>${escape(s.name)}</span>
-          <span style="color:var(--muted);font-size:11px">${escape(s.host || '')}</span>
-        </div>`;
-      });
+      for (const child of [...nodes[path].children].sort()) html += folderRowHTML(child, depth + 1);
+      for (const s of nodes[path].servers) html += _bulkServerRowHTML(s, depth + 1);
     }
     return html;
   }
 
   let html = '';
-  rootFolders.sort().forEach(p => { html += renderFolder(p); });
-  rootServers.forEach(s => {
-    const checked = _bulkSelected.has(s.id);
-    html += `<div class="bulk-item" style="padding-left:10px">
-      <input type="checkbox" data-bulk-server="${s.id}" ${checked ? 'checked' : ''} onchange="bulkServerCheck(${s.id},this.checked)">
-      <span>${escape(s.name)}</span>
-      <span style="color:var(--muted);font-size:11px">${escape(s.host || '')}</span>
-    </div>`;
-  });
+  for (const root of [...roots].sort()) html += folderRowHTML(root, 0);
+  for (const s of state.servers.filter(s => !s.server_group)) html += _bulkServerRowHTML(s, 0);
+  if (!html) html = '<div style="padding:16px;color:var(--muted);font-size:13px;text-align:center">No servers yet</div>';
   container.innerHTML = html;
-
-  // Apply indeterminate states
-  container.querySelectorAll('input[data-indeterminate="true"]').forEach(cb => { cb.indeterminate = true; });
+  container.querySelectorAll('input[data-bi]').forEach(cb => { cb.indeterminate = true; });
   _updateBulkCount();
 }
 
-function _bulkGetAllServersUnder(path, groups, allPaths) {
-  const ids = [];
-  const prefix = path + '/';
-  Object.keys(groups).forEach(g => {
-    if (g === path || g.startsWith(prefix)) {
-      groups[g].forEach(s => ids.push(s.id));
-    }
-  });
-  return ids;
+function _bulkServerRowHTML(s, depth) {
+  const checked = _bulkSelected.has(s.id);
+  const pl = 8 + depth * 16 + 20;
+  return `<div class="bulk-row" style="padding:4px 8px 4px ${pl}px">
+    <input type="checkbox" ${checked ? 'checked' : ''} onchange="bulkServerCheck(${s.id},this.checked)"
+      style="flex-shrink:0;cursor:pointer;accent-color:var(--accent-h)">
+    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(s.name)}</span>
+    <span style="flex-shrink:0;color:var(--muted);font-size:11px;margin-left:6px">${escape(s.host || '')}</span>
+  </div>`;
+}
+
+function bulkExpandAll() {
+  const { nodes } = _buildBulkNodes();
+  Object.keys(nodes).forEach(p => _bulkExpanded.add(p));
+  renderBulkTree();
+}
+
+function bulkCollapseAll() {
+  _bulkExpanded.clear();
+  renderBulkTree();
 }
 
 function bulkToggleFolderExpand(path) {
@@ -1977,20 +2251,8 @@ function bulkToggleFolderExpand(path) {
 }
 
 function bulkFolderCheck(path, checked) {
-  const groups = {};
-  state.servers.forEach(s => {
-    const g = s.server_group || '';
-    if (!groups[g]) groups[g] = [];
-    groups[g].push(s);
-  });
-  const allPaths = new Set();
-  state.servers.forEach(s => {
-    const g = s.server_group || '';
-    if (!g) return;
-    const parts = g.split('/');
-    for (let i = 1; i <= parts.length; i++) allPaths.add(parts.slice(0, i).join('/'));
-  });
-  const ids = _bulkGetAllServersUnder(path, groups, allPaths);
+  const { nodes } = _buildBulkNodes();
+  const ids = _bulkGetAllServerIds(path, nodes);
   ids.forEach(id => { if (checked) _bulkSelected.add(id); else _bulkSelected.delete(id); });
   renderBulkTree();
 }
@@ -2002,7 +2264,14 @@ function bulkServerCheck(id, checked) {
 }
 
 function bulkSelectAll() {
-  state.servers.forEach(s => _bulkSelected.add(s.id));
+  const query = (document.getElementById('bulk-server-search')?.value || '').toLowerCase().trim();
+  const pool = query
+    ? state.servers.filter(s =>
+        s.name.toLowerCase().includes(query) ||
+        (s.host || '').toLowerCase().includes(query) ||
+        (s.server_group || '').toLowerCase().includes(query))
+    : state.servers;
+  pool.forEach(s => _bulkSelected.add(s.id));
   renderBulkTree();
 }
 
@@ -2161,7 +2430,7 @@ function bulkToggleResult(id) {
 
 async function runBulkServer(server, cmd, outEl) {
   const ec = getEffectiveCredential(server);
-  const credId = ec?.id ?? null;
+  const credId = ec?.id ?? 0;
   if (outEl) { outEl.classList.add('open'); outEl.textContent = ''; }
   await new Promise((resolve, reject) => {
     const payload = { server_id: server.id, command_id: cmd.id, credential_id: credId };
@@ -2178,13 +2447,18 @@ async function runBulkServer(server, cmd, outEl) {
         reader.read().then(({ done, value }) => {
           if (done) { resolve(); return; }
           buf += decoder.decode(value, { stream: true });
-          const lines = buf.split('\n');
-          buf = lines.pop();
-          lines.forEach(line => {
-            if (!line.startsWith('data:')) return;
+          const parts = buf.split('\n\n');
+          buf = parts.pop();
+          parts.forEach(part => {
+            const line = part.replace(/^data: /, '').trim();
+            if (!line) return;
             try {
-              const d = JSON.parse(line.slice(5).trim());
-              if (outEl && d.output != null) outEl.textContent += d.output;
+              const d = JSON.parse(line);
+              if (outEl) {
+                if (d.type === 'stdout' || d.type === 'stderr') outEl.textContent += d.text;
+                else if (d.type === 'error') outEl.textContent += '[Error] ' + d.text + '\n';
+                else if (d.type === 'exit' && d.code !== 0) outEl.textContent += `\n[Exit code: ${d.code}]`;
+              }
             } catch(_) {}
           });
           if (outEl) outEl.scrollTop = outEl.scrollHeight;
@@ -2195,6 +2469,50 @@ async function runBulkServer(server, cmd, outEl) {
       read();
     }).catch(reject);
   });
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+// ── Remote Access ─────────────────────────────────────────────────────────────
+
+function renderRemoteAccess() {
+  const serverSel = document.getElementById('ra-server');
+  const credSel = document.getElementById('ra-credential');
+  if (!serverSel || !credSel) return;
+  const sv = serverSel.value, cv = credSel.value;
+  serverSel.innerHTML = '<option value="">— select server —</option>' +
+    state.servers.map(s => `<option value="${s.id}" ${s.id == sv ? 'selected' : ''}>${escape(s.name)} (${escape(s.host)})</option>`).join('');
+  credSel.innerHTML = '<option value="">— select credential —</option>' +
+    state.credentials.map(c => `<option value="${c.id}" ${c.id == cv ? 'selected' : ''}>${escape(c.name)}</option>`).join('');
+}
+
+function raProtocolChange() {
+  const proto = document.getElementById('ra-protocol').value;
+  document.getElementById('ra-port').value = proto === 'rdp' ? '3389' : '5900';
+}
+
+async function connectRemoteAccess() {
+  const serverId = document.getElementById('ra-server').value;
+  const credId = document.getElementById('ra-credential').value;
+  const protocol = document.getElementById('ra-protocol').value;
+  const port = parseInt(document.getElementById('ra-port').value) || (protocol === 'rdp' ? 3389 : 5900);
+  if (!serverId) { toast('Select a server', 'fail'); return; }
+  if (!credId) { toast('Select credentials', 'fail'); return; }
+  if (protocol === 'vnc') {
+    try {
+      const data = await api('POST', '/api/vnc-session', { server_id: +serverId, credential_id: +credId, port });
+      window.open('/vnc/' + data.token, '_blank');
+    } catch (e) {
+      toast('VNC error: ' + e.message, 'fail');
+    }
+  } else {
+    try {
+      const data = await api('POST', '/api/rdp-session', { server_id: +serverId, credential_id: +credId, port });
+      window.open('/rdp/' + data.token, '_blank');
+    } catch (e) {
+      toast('RDP error: ' + e.message, 'fail');
+    }
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

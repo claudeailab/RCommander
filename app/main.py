@@ -1,12 +1,15 @@
+import asyncio
 import io
 import json
 import os
+import secrets
+import time
 from typing import Literal, Optional
 
 import paramiko
 import winrm
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import Column, Integer, String, Text, create_engine, or_, text
@@ -51,12 +54,20 @@ class CommandRow(Base):
     command = Column(Text, nullable=False)
     description = Column(Text, default="")
     server_id = Column(Integer, nullable=True)
+    shell_type = Column(String, default="cmd")
 
 
 class GroupRow(Base):
     __tablename__ = "groups"
     id = Column(Integer, primary_key=True, index=True)
     path = Column(String, unique=True, nullable=False)
+
+
+class FolderCredentialRow(Base):
+    __tablename__ = "folder_credentials"
+    id = Column(Integer, primary_key=True, index=True)
+    path = Column(String, unique=True, nullable=False)
+    credential_id = Column(Integer, nullable=False)
 
 
 Base.metadata.create_all(engine)
@@ -70,7 +81,8 @@ def _migrate():
                         ("server_group",  "TEXT NOT NULL DEFAULT ''")],
         "credentials": [("description",   "TEXT NOT NULL DEFAULT ''")],
         "commands":    [("description",   "TEXT NOT NULL DEFAULT ''"),
-                        ("server_id",     "INTEGER")],
+                        ("server_id",     "INTEGER"),
+                        ("shell_type",    "TEXT NOT NULL DEFAULT 'cmd'")],
     }
     with engine.connect() as conn:
         for table, columns in migrations.items():
@@ -82,6 +94,246 @@ def _migrate():
 
 
 _migrate()
+
+APP_VERSION = "1.4.0"
+
+# ── VNC session store (short-lived, in-memory) ────────────────────────────────
+_vnc_sessions: dict = {}
+
+
+def _prune_vnc_sessions() -> None:
+    cutoff = time.time() - 300  # 5-minute TTL
+    for k in [k for k, v in _vnc_sessions.items() if v["ts"] < cutoff]:
+        del _vnc_sessions[k]
+
+
+_VNC_PAGE_TMPL = """\
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>VNC — %%NAME%%</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; flex-direction: column; height: 100vh; font-family: system-ui, sans-serif; }
+#bar { background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 16px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; color: #e6edf3; font-size: 13px; }
+#status { margin-left: auto; font-size: 12px; }
+#vnc { flex: 1; overflow: hidden; }
+#vnc > div, #vnc canvas { width: 100% !important; height: 100% !important; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2">
+    <rect x="2" y="3" width="20" height="14" rx="2"/>
+    <line x1="8" y1="21" x2="16" y2="21"/>
+    <line x1="12" y1="17" x2="12" y2="21"/>
+  </svg>
+  VNC — %%NAME%%
+  <span id="status" style="color:#8b949e">Connecting…</span>
+</div>
+<div id="vnc"><div id="t"></div></div>
+<script type="module">
+import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js';
+const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+const url = proto + '://' + location.host + '/ws/vnc/%%TOKEN%%';
+const rfb = new RFB(document.getElementById('t'), url, { credentials: { password: %%PW%% } });
+rfb.scaleViewport = true;
+rfb.resizeSession = true;
+rfb.addEventListener('connect', () => {
+  const s = document.getElementById('status');
+  s.textContent = 'Connected'; s.style.color = '#3fb950';
+});
+rfb.addEventListener('disconnect', ev => {
+  const s = document.getElementById('status');
+  s.textContent = ev.detail.clean ? 'Disconnected' : 'Connection lost';
+  s.style.color = '#f85149';
+});
+rfb.addEventListener('credentialsrequired', () => {
+  rfb.sendCredentials({ password: prompt('VNC Password:') || '' });
+});
+</script>
+</body>
+</html>"""
+
+
+def _vnc_page(token: str, name: str, password: str) -> str:
+    safe = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        _VNC_PAGE_TMPL
+        .replace("%%TOKEN%%", token)
+        .replace("%%PW%%", json.dumps(password))
+        .replace("%%NAME%%", safe)
+    )
+
+
+# ── RDP session store (short-lived, in-memory) ────────────────────────────────
+_rdp_sessions: dict = {}
+
+
+def _prune_rdp_sessions() -> None:
+    cutoff = time.time() - 300
+    for k in [k for k, v in _rdp_sessions.items() if v["ts"] < cutoff]:
+        del _rdp_sessions[k]
+
+
+def _guac_encode(opcode: str, *args) -> str:
+    """Encode a Guacamole protocol instruction."""
+    parts = [str(opcode)] + [str(a) for a in args]
+    return ",".join(f"{len(p)}.{p}" for p in parts) + ";"
+
+
+def _guac_parse_instr(instr: str) -> list:
+    """Parse a Guacamole instruction into a list of string elements."""
+    elements = []
+    s = instr.rstrip(";")
+    i = 0
+    while i < len(s):
+        dot = s.index(".", i)
+        length = int(s[i:dot])
+        value = s[dot + 1:dot + 1 + length]
+        elements.append(value)
+        i = dot + 1 + length
+        if i < len(s) and s[i] == ",":
+            i += 1
+    return elements
+
+
+async def _guac_read_instr(reader: asyncio.StreamReader) -> str:
+    """Read one complete Guacamole instruction (up to and including ';')."""
+    data = await reader.readuntil(b";")
+    return data.decode("utf-8", errors="replace")
+
+
+async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, session: dict) -> None:
+    """Negotiate an RDP connection with guacd."""
+    writer.write(_guac_encode("select", "rdp").encode())
+    await writer.drain()
+
+    args_instr = await _guac_read_instr(reader)
+    elements = _guac_parse_instr(args_instr)
+    param_names = elements[1:]  # first element is opcode "args"
+
+    writer.write(_guac_encode("size", "1280", "800", "96").encode())
+    writer.write(_guac_encode("audio").encode())
+    writer.write(_guac_encode("video").encode())
+    writer.write(_guac_encode("image", "image/png", "image/jpeg").encode())
+    await writer.drain()
+
+    rdp_defaults: dict = {
+        "hostname": session["host"],
+        "port": str(session["port"]),
+        "username": session["username"],
+        "password": session["password"],
+        "width": "1280",
+        "height": "800",
+        "dpi": "96",
+        "color-depth": "16",
+        "security": "any",
+        "ignore-cert": "true",
+        "client-name": "rcommander",
+        "enable-font-smoothing": "true",
+        "enable-wallpaper": "false",
+        "enable-theming": "false",
+        "enable-full-window-drag": "false",
+        "enable-desktop-composition": "false",
+        "enable-menu-animations": "false",
+    }
+    connect_args = [rdp_defaults.get(p, "") for p in param_names]
+    writer.write(_guac_encode("connect", *connect_args).encode())
+    await writer.drain()
+
+
+_RDP_PAGE_TMPL = """\
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>RDP — %%NAME%%</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000; display:flex; flex-direction:column; height:100vh; font-family:system-ui,sans-serif; overflow:hidden; }
+#bar { background:#161b22; border-bottom:1px solid #30363d; padding:8px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0; color:#e6edf3; font-size:13px; }
+#status { margin-left:auto; font-size:12px; color:#8b949e; }
+#display { flex:1; overflow:hidden; position:relative; cursor:none; }
+#display div { width:100% !important; height:100% !important; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2">
+    <rect x="2" y="3" width="20" height="14" rx="2"/>
+    <line x1="8" y1="21" x2="16" y2="21"/>
+    <line x1="12" y1="17" x2="12" y2="21"/>
+  </svg>
+  RDP — %%NAME%%
+  <span id="status">Connecting…</span>
+</div>
+<div id="display"></div>
+<script src="https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/guacamole-common.min.js"></script>
+<script>
+(function() {
+  var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  var wsUrl = proto + '://' + location.host + '/ws/rdp/%%TOKEN%%';
+  var status = document.getElementById('status');
+
+  var tunnel = new Guacamole.WebSocketTunnel(wsUrl);
+  var client = new Guacamole.Client(tunnel);
+
+  var displayDiv = document.getElementById('display');
+  displayDiv.appendChild(client.getDisplay().getElement());
+
+  client.onerror = function(err) {
+    status.textContent = 'Error: ' + (err.message || 'Connection failed');
+    status.style.color = '#f85149';
+  };
+
+  tunnel.onstatechange = function(state) {
+    if (state === Guacamole.Tunnel.State.OPEN) {
+      status.textContent = 'Connected';
+      status.style.color = '#3fb950';
+    } else if (state === Guacamole.Tunnel.State.CLOSED) {
+      if (status.style.color !== 'rgb(248, 81, 73)') {
+        status.textContent = 'Disconnected';
+        status.style.color = '#f85149';
+      }
+    }
+  };
+
+  client.connect();
+  window.onunload = function() { client.disconnect(); };
+
+  var display = client.getDisplay();
+  var mouse = new Guacamole.Mouse(display.getElement());
+  mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = function(state) {
+    client.sendMouseState(state);
+  };
+
+  var keyboard = new Guacamole.Keyboard(document);
+  keyboard.onkeydown = function(keysym) { client.sendKeyEvent(1, keysym); };
+  keyboard.onkeyup = function(keysym) { client.sendKeyEvent(0, keysym); };
+
+  function scaleDisplay() {
+    var w = displayDiv.clientWidth;
+    var h = displayDiv.clientHeight;
+    var dw = display.getWidth();
+    var dh = display.getHeight();
+    if (dw && dh) {
+      display.scale(Math.min(w / dw, h / dh));
+    }
+  }
+  window.addEventListener('resize', scaleDisplay);
+  display.onresize = scaleDisplay;
+})();
+</script>
+</body>
+</html>"""
+
+
+def _rdp_page(token: str, name: str) -> str:
+    safe = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return _RDP_PAGE_TMPL.replace("%%TOKEN%%", token).replace("%%NAME%%", safe)
+
 
 app = FastAPI(title="RCommander")
 
@@ -111,6 +363,7 @@ class CommandIn(BaseModel):
     command: str
     description: str = ""
     server_id: Optional[int] = None
+    shell_type: str = "cmd"
 
 
 class ExecuteRequest(BaseModel):
@@ -127,6 +380,10 @@ class ImportResult(BaseModel):
 
 class GroupIn(BaseModel):
     path: str
+
+
+class FolderCredentialIn(BaseModel):
+    credential_id: int
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -176,6 +433,7 @@ def _sse(obj: dict) -> str:
 
 
 def _ssh_stream(host: str, port: int, username: str, password: str, private_key: str, command: str):
+    import select
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -188,18 +446,41 @@ def _ssh_stream(host: str, port: int, username: str, password: str, private_key:
             raise ValueError("No authentication method provided")
 
         client.connect(host, port=port, **connect_kwargs)
-        _, stdout, stderr = client.exec_command(command, get_pty=True)
+        # get_pty=True gives a real PTY so programs emit colours/formatting
+        # exactly as they would in an interactive SSH session
+        _, stdout, stderr = client.exec_command(command, get_pty=True, timeout=None)
+        channel = stdout.channel
 
-        for line in iter(lambda: stdout.readline(4096), ""):
-            if not line:
-                break
-            yield _sse({"type": "stdout", "text": line})
+        # Stream raw chunks — PTY output uses \r\n and cursor codes that
+        # don't split cleanly on \n, so send chunks as-is
+        buf_out = b""
+        buf_err = b""
 
-        err = stderr.read().decode("utf-8", errors="replace")
-        if err:
-            yield _sse({"type": "stderr", "text": err})
+        while not channel.closed or channel.recv_ready() or channel.recv_stderr_ready():
+            readable, _, _ = select.select([channel], [], [], 0.2)
+            if readable:
+                if channel.recv_ready():
+                    chunk = channel.recv(4096)
+                    if chunk:
+                        buf_out += chunk
+                        while b"\n" in buf_out:
+                            line, buf_out = buf_out.split(b"\n", 1)
+                            yield _sse({"type": "stdout", "text": line.decode("utf-8", errors="replace") + "\n"})
+                if channel.recv_stderr_ready():
+                    chunk = channel.recv_stderr(4096)
+                    if chunk:
+                        buf_err += chunk
+                        while b"\n" in buf_err:
+                            line, buf_err = buf_err.split(b"\n", 1)
+                            yield _sse({"type": "stderr", "text": line.decode("utf-8", errors="replace") + "\n"})
 
-        code = stdout.channel.recv_exit_status()
+        # Flush any remaining partial output (no trailing newline)
+        if buf_out:
+            yield _sse({"type": "stdout", "text": buf_out.decode("utf-8", errors="replace")})
+        if buf_err:
+            yield _sse({"type": "stderr", "text": buf_err.decode("utf-8", errors="replace")})
+
+        code = channel.recv_exit_status()
         yield _sse({"type": "exit", "code": code})
     except Exception as exc:
         yield _sse({"type": "error", "text": str(exc)})
@@ -208,7 +489,7 @@ def _ssh_stream(host: str, port: int, username: str, password: str, private_key:
         yield _sse({"type": "done"})
 
 
-def _winrm_stream(host: str, port: int, username: str, password: str, command: str):
+def _winrm_stream(host: str, port: int, username: str, password: str, command: str, shell_type: str = "cmd"):
     try:
         protocol = "https" if port == 5986 else "http"
         endpoint = f"{protocol}://{host}:{port}/wsman"
@@ -218,7 +499,7 @@ def _winrm_stream(host: str, port: int, username: str, password: str, command: s
             transport="basic",
             server_cert_validation="ignore",
         )
-        if command.strip().lower().startswith("powershell") or command.strip().startswith("$"):
+        if shell_type == "powershell":
             result = s.run_ps(command)
         else:
             result = s.run_cmd(command)
@@ -237,6 +518,11 @@ def _winrm_stream(host: str, port: int, username: str, password: str, command: s
 
 
 # ── Servers ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/version")
+def get_version():
+    return {"version": APP_VERSION}
+
 
 @app.get("/api/servers")
 def list_servers():
@@ -339,6 +625,11 @@ def rename_group(data: GroupRename):
         db.query(GroupRow).filter(GroupRow.path == old).update({GroupRow.path: new})
         for row in db.query(GroupRow).filter(GroupRow.path.like(prefix + "%")).all():
             row.path = new + "/" + row.path[len(prefix):]
+        db.query(FolderCredentialRow).filter(FolderCredentialRow.path == old).update(
+            {FolderCredentialRow.path: new}
+        )
+        for row in db.query(FolderCredentialRow).filter(FolderCredentialRow.path.like(prefix + "%")).all():
+            row.path = new + "/" + row.path[len(prefix):]
         db.commit()
     return {"ok": True}
 
@@ -354,6 +645,38 @@ def delete_group(name: str):
             or_(GroupRow.path == name,
                 GroupRow.path.like(name + "/%"))
         ).delete(synchronize_session="fetch")
+        db.query(FolderCredentialRow).filter(
+            or_(FolderCredentialRow.path == name,
+                FolderCredentialRow.path.like(name + "/%"))
+        ).delete(synchronize_session="fetch")
+        db.commit()
+
+
+# ── Folder Credentials ────────────────────────────────────────────────────────
+
+@app.get("/api/folder-credentials")
+def list_folder_credentials():
+    with Session() as db:
+        return [{"path": r.path, "credential_id": r.credential_id}
+                for r in db.query(FolderCredentialRow).all()]
+
+
+@app.put("/api/folder-credentials/{path:path}", status_code=200)
+def set_folder_credential(path: str, data: FolderCredentialIn):
+    with Session() as db:
+        row = db.query(FolderCredentialRow).filter_by(path=path).first()
+        if row:
+            row.credential_id = data.credential_id
+        else:
+            db.add(FolderCredentialRow(path=path, credential_id=data.credential_id))
+        db.commit()
+    return {"path": path, "credential_id": data.credential_id}
+
+
+@app.delete("/api/folder-credentials/{path:path}", status_code=204)
+def delete_folder_credential(path: str):
+    with Session() as db:
+        db.query(FolderCredentialRow).filter_by(path=path).delete()
         db.commit()
 
 
@@ -447,17 +770,195 @@ def execute(req: ExecuteRequest):
         s_host, s_port = server.host, server.port
         c_user, c_pass, c_key = cred.username, cred.password, cred.private_key
         c_command = cmd.command
+        c_shell_type = cmd.shell_type or "cmd"
 
     def stream():
         if s_type == "ssh":
             yield from _ssh_stream(s_host, s_port, c_user, c_pass, c_key, c_command)
         elif s_type == "winrm":
-            yield from _winrm_stream(s_host, s_port, c_user, c_pass, c_command)
+            yield from _winrm_stream(s_host, s_port, c_user, c_pass, c_command, c_shell_type)
         else:
             yield _sse({"type": "error", "text": f"Unknown server type: {s_type}"})
             yield _sse({"type": "done"})
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+# ── Health & static ───────────────────────────────────────────────────────────
+
+# ── Remote Access ─────────────────────────────────────────────────────────────
+
+class VncSessionIn(BaseModel):
+    server_id: int
+    credential_id: int
+    port: int = 5900
+
+
+class RdpSessionIn(BaseModel):
+    server_id: int
+    credential_id: int
+    port: int = 3389
+
+
+@app.post("/api/vnc-session")
+def create_vnc_session(data: VncSessionIn):
+    _prune_vnc_sessions()
+    with Session() as db:
+        server = db.get(ServerRow, data.server_id)
+        cred = db.get(CredentialRow, data.credential_id)
+        if not server or not cred:
+            raise HTTPException(404, "Server or credential not found")
+        token = secrets.token_urlsafe(16)
+        _vnc_sessions[token] = {
+            "host": server.host,
+            "port": data.port,
+            "password": cred.password or "",
+            "name": server.name,
+            "ts": time.time(),
+        }
+    return {"token": token}
+
+
+@app.get("/vnc/{token}", response_class=HTMLResponse)
+def vnc_session_page(token: str):
+    session = _vnc_sessions.get(token)
+    if not session:
+        return HTMLResponse("<h1 style='font-family:sans-serif;padding:2rem'>Session expired or not found.</h1>", status_code=404)
+    return HTMLResponse(_vnc_page(token, session["name"], session["password"]))
+
+
+@app.websocket("/ws/vnc/{token}")
+async def vnc_ws_proxy(websocket: WebSocket, token: str):
+    session = _vnc_sessions.pop(token, None)
+    if not session:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept(subprotocol="binary")
+
+    try:
+        reader, writer = await asyncio.open_connection(session["host"], session["port"])
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    async def ws_to_tcp():
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                writer.write(data)
+                await writer.drain()
+        except Exception:
+            pass
+
+    async def tcp_to_ws():
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                await websocket.send_bytes(data)
+        except Exception:
+            pass
+
+    tasks = [asyncio.ensure_future(ws_to_tcp()), asyncio.ensure_future(tcp_to_ws())]
+    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for t in tasks:
+        t.cancel()
+    writer.close()
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+
+@app.post("/api/rdp-session")
+def create_rdp_session(data: RdpSessionIn):
+    _prune_rdp_sessions()
+    with Session() as db:
+        server = db.get(ServerRow, data.server_id)
+        cred = db.get(CredentialRow, data.credential_id) if data.credential_id else None
+        if not server:
+            raise HTTPException(404, "Server not found")
+        token = secrets.token_urlsafe(16)
+        _rdp_sessions[token] = {
+            "host": server.host,
+            "port": data.port,
+            "username": cred.username if cred else "",
+            "password": cred.password if cred else "",
+            "name": server.name,
+            "ts": time.time(),
+        }
+    return {"token": token}
+
+
+@app.get("/rdp/{token}", response_class=HTMLResponse)
+def rdp_session_page(token: str):
+    session = _rdp_sessions.get(token)
+    if not session:
+        return HTMLResponse("<h1 style='font-family:sans-serif;padding:2rem'>Session expired or not found.</h1>", status_code=404)
+    return HTMLResponse(_rdp_page(token, session["name"]))
+
+
+@app.websocket("/ws/rdp/{token}")
+async def rdp_ws_proxy(websocket: WebSocket, token: str):
+    session = _rdp_sessions.get(token)
+    if not session:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept(subprotocol="guacamole")
+
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", 4822)
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    try:
+        await _guac_handshake(reader, writer, session)
+    except Exception:
+        writer.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    async def ws_to_tcp():
+        try:
+            while True:
+                msg = await websocket.receive_text()
+                writer.write(msg.encode())
+                await writer.drain()
+        except Exception:
+            pass
+
+    async def tcp_to_ws():
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                await websocket.send_text(data.decode("utf-8", errors="replace"))
+        except Exception:
+            pass
+
+    tasks = [asyncio.ensure_future(ws_to_tcp()), asyncio.ensure_future(tcp_to_ws())]
+    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for t in tasks:
+        t.cancel()
+    writer.close()
+    try:
+        await websocket.close()
+    except Exception:
+        pass
 
 
 # ── Health & static ───────────────────────────────────────────────────────────

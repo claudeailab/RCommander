@@ -1,8 +1,27 @@
-# RCommander
+# RCommander — Claude Guidelines
 
-A self-hosted web UI for running commands on remote servers over SSH (Linux/Mac) and WinRM (Windows).
+## Docker & Build
 
-![RCommander](screenshot.png)
+- The web app runs as a Docker container; always build multi-arch: **linux/amd64** and **linux/arm64**
+- Host the image on **GitHub Container Registry**: `ghcr.io/claudeailab/rcommander`
+- After merging any branch or pull request, trigger the GitHub Actions build workflow
+
+## Versioning
+
+- Always display a discreet version number in the web app (e.g. in the sidebar)
+- Bump the version with every push to main
+
+## UX
+
+- The web app must be functional and intuitive on both **desktop and mobile**
+
+## GitHub README
+
+- Include a **Features** section with bullet points and a short description of each feature
+- Include an **Updating** section with:
+  ```bash
+  docker compose pull rcommander && docker compose up -d rcommander
+  ```
 
 ## Features
 
@@ -24,9 +43,7 @@ A self-hosted web UI for running commands on remote servers over SSH (Linux/Mac)
 - **Remote Access** — connect to servers via VNC (in-browser noVNC session) or RDP (full in-browser session powered by Apache Guacamole)
 - **SQLite persistence** — single-file database stored under `/data`
 
-## Quick Start
-
-Add this to your `docker-compose.yml`:
+## docker-compose.yml template
 
 ```yaml
   rcommander:
@@ -42,30 +59,3 @@ Add this to your `docker-compose.yml`:
     volumes:
       - ./config/rcommander:/data
 ```
-
-Then run:
-
-```bash
-docker compose up -d
-```
-
-Open **http://your-host:8090**
-
-## Updating
-
-```bash
-docker compose pull rcommander && docker compose up -d rcommander
-```
-
-## WinRM Setup (Windows)
-
-Run the following in **PowerShell as Administrator** on the target Windows host:
-
-```powershell
-Enable-PSRemoting -Force
-Set-Item WSMan:\localhost\Service\Auth\Basic $true
-Set-Item WSMan:\localhost\Service\AllowUnencrypted $true
-Restart-Service WinRM
-New-NetFirewallRule -DisplayName "WinRM 5985" -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow
-```
-
