@@ -286,8 +286,8 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
   <span id="status">Connecting…</span>
 </div>
 <div id="display"></div>
-<script src="https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/src/main/webapp/guacamole.js"></script>
-<script>
+<script type="module">
+import Guacamole from '/guacamole-common.js';
 (function() {
   var proto = location.protocol === 'https:' ? 'wss' : 'ws';
   var wsUrl = proto + '://' + location.host + '/ws/rdp/%%TOKEN%%';
