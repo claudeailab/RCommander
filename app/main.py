@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.6.2"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -181,6 +181,24 @@ def _vnc_page(token: str, name: str, password: str) -> str:
         .replace("%%PW%%", json.dumps(password))
         .replace("%%NAME%%", safe)
     )
+
+
+# ── SSH session store ──────────────────────────────────────────────────────────
+_ssh_sessions: dict = {}
+
+def _prune_ssh_sessions() -> None:
+    cutoff = time.time() - 300
+    for k in [k for k, v in _ssh_sessions.items() if v["ts"] < cutoff]:
+        del _ssh_sessions[k]
+
+def _load_private_key_for_session(key_str: str):
+    import io
+    for cls in [paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.DSSKey]:
+        try:
+            return cls.from_private_key(io.StringIO(key_str))
+        except Exception:
+            continue
+    return None
 
 
 # ── RDP session store (short-lived, in-memory) ────────────────────────────────
@@ -281,6 +299,56 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         msg = parts[1] if len(parts) > 1 else "unknown error"
         raise RuntimeError(f"guacd: {msg}")
     return response  # "ready" instruction; caller must forward to browser
+
+
+_SSH_PAGE_TMPL = """\
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SSH — %%NAME%%</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0d1117; display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+#bar { background:#161b22; border-bottom:1px solid #30363d; padding:8px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0; color:#e6edf3; font-size:13px; }
+#status { margin-left:auto; font-size:12px; color:#8b949e; }
+#terminal { flex:1; overflow:hidden; padding:4px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+  SSH — %%NAME%%
+  <span id="status">Connecting…</span>
+</div>
+<div id="terminal"></div>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script>
+const status = document.getElementById('status');
+const term = new Terminal({ cursorBlink:true, fontSize:14, fontFamily:'Menlo,Monaco,"Courier New",monospace', theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'} });
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.open(document.getElementById('terminal'));
+fitAddon.fit();
+const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+const ws = new WebSocket(proto + '://' + location.host + '/ws/ssh/%%TOKEN%%');
+ws.onopen = function() { status.textContent='Connected'; status.style.color='#3fb950'; sendResize(); };
+ws.onclose = function() { status.textContent='Disconnected'; status.style.color='#f85149'; term.write('\\r\\n\\r\\n\\x1b[1;31mConnection closed.\\x1b[0m\\r\\n'); };
+ws.onerror = function() { status.textContent='Error'; status.style.color='#f85149'; };
+ws.onmessage = function(e) { term.write(e.data); };
+term.onData(function(data) { if (ws.readyState===WebSocket.OPEN) ws.send(data); });
+function sendResize() { if (ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'resize',cols:term.cols,rows:term.rows})); }
+window.addEventListener('resize', function() { fitAddon.fit(); sendResize(); });
+term.onResize(function() { sendResize(); });
+</script>
+</body>
+</html>"""
+
+def _ssh_page(token: str, name: str) -> str:
+    safe = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return _SSH_PAGE_TMPL.replace("%%TOKEN%%", token).replace("%%NAME%%", safe)
 
 
 _RDP_PAGE_TMPL = """\
@@ -860,6 +928,12 @@ class VncSessionIn(BaseModel):
     port: int = 5900
 
 
+class SshSessionIn(BaseModel):
+    server_id: int
+    credential_id: int
+    port: int = 22
+
+
 class RdpSessionIn(BaseModel):
     server_id: int
     credential_id: int
@@ -1044,6 +1118,118 @@ async def rdp_ws_proxy(websocket: WebSocket, token: str):
     for t in tasks:
         t.cancel()
     writer.close()
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+
+def _open_ssh_channel(client: paramiko.SSHClient):
+    ch = client.invoke_shell(term="xterm-256color", width=220, height=50)
+    ch.settimeout(0.1)
+    return ch
+
+def _read_ssh_channel(channel) -> bytes | None:
+    import socket
+    try:
+        data = channel.recv(4096)
+        return data if data else None
+    except socket.timeout:
+        return b""
+    except Exception:
+        return None
+
+
+@app.post("/api/ssh-session")
+def create_ssh_session(data: SshSessionIn):
+    _prune_ssh_sessions()
+    with Session() as db:
+        server = db.get(ServerRow, data.server_id)
+        cred = db.get(CredentialRow, data.credential_id) if data.credential_id else None
+        if not server:
+            raise HTTPException(404, "Server not found")
+        token = secrets.token_urlsafe(16)
+        _ssh_sessions[token] = {
+            "host": server.host,
+            "port": data.port,
+            "username": cred.username if cred else "",
+            "password": cred.password if cred else "",
+            "private_key": cred.private_key if cred else "",
+            "name": server.name,
+            "ts": time.time(),
+        }
+    return {"token": token}
+
+
+@app.get("/ssh/{token}", response_class=HTMLResponse)
+def ssh_session_page(token: str):
+    session = _ssh_sessions.get(token)
+    if not session:
+        return HTMLResponse("<h3>Session expired or not found</h3>", status_code=404)
+    return HTMLResponse(_ssh_page(token, session["name"]))
+
+
+@app.websocket("/ws/ssh/{token}")
+async def ssh_ws_proxy(websocket: WebSocket, token: str):
+    session = _ssh_sessions.get(token)
+    if not session:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    loop = asyncio.get_event_loop()
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        pkey = await loop.run_in_executor(None, lambda: _load_private_key_for_session(session["private_key"]) if session.get("private_key") else None)
+        await loop.run_in_executor(None, lambda: ssh_client.connect(
+            hostname=session["host"], port=session["port"],
+            username=session["username"],
+            password=session["password"] or None,
+            pkey=pkey, timeout=10, look_for_keys=False, allow_agent=False,
+        ))
+    except Exception as e:
+        try:
+            await websocket.send_text(f"\r\n\033[1;31mSSH connection failed: {e}\033[0m\r\n")
+            await websocket.close()
+        except Exception:
+            pass
+        return
+    channel = await loop.run_in_executor(None, lambda: _open_ssh_channel(ssh_client))
+
+    async def ws_to_ssh():
+        try:
+            while True:
+                data = await websocket.receive_text()
+                try:
+                    msg = json.loads(data)
+                    if msg.get("type") == "resize":
+                        channel.resize_pty(width=int(msg.get("cols", 80)), height=int(msg.get("rows", 24)))
+                        continue
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                channel.send(data.encode("utf-8"))
+        except Exception:
+            pass
+
+    async def ssh_to_ws():
+        try:
+            while True:
+                data = await loop.run_in_executor(None, lambda: _read_ssh_channel(channel))
+                if data is None:
+                    break
+                await websocket.send_text(data.decode("utf-8", errors="replace"))
+        except Exception:
+            pass
+
+    tasks = [asyncio.ensure_future(ws_to_ssh()), asyncio.ensure_future(ssh_to_ws())]
+    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for t in tasks:
+        t.cancel()
+    try:
+        channel.close()
+    except Exception:
+        pass
+    ssh_client.close()
     try:
         await websocket.close()
     except Exception:

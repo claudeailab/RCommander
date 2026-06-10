@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libkrb5-dev \
     guacd \
     libguac-client-rdp0 \
+    libguac-client-ssh0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
