@@ -965,10 +965,6 @@
             <input id="rdp-default-port" type="number" value="3389" min="1" max="65535" style="max-width:120px">
           </div>
         </div>
-        <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
-          <input type="checkbox" id="rdp-default-console" style="width:auto;margin:0">
-          <label for="rdp-default-console" style="margin:0;cursor:pointer">Console / admin session</label>
-        </div>
       </div>
       <div class="card" style="padding:20px;margin-top:12px">
         <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Display</div>
@@ -1043,6 +1039,10 @@
             <input type="checkbox" id="rdp-default-disable-audio" style="width:auto;margin:0" checked>
             <span>Disable remote audio</span>
           </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+            <input type="checkbox" id="rdp-default-console" style="width:auto;margin:0">
+            <span>Console / admin session</span>
+          </label>
         </div>
       </div>
       <div class="card" style="padding:20px;margin-top:12px">
@@ -1058,7 +1058,7 @@
       <div style="margin-top:8px;font-size:12px;color:var(--muted);line-height:1.6">
         These defaults apply when opening a new RDP session from Remote Access.
       </div>
-      <button class="btn btn-primary" style="margin-top:16px" onclick="saveRdpSettings()">Save</button>
+      <button id="rdp-save-btn" class="btn btn-primary" style="margin-top:16px;opacity:.4;pointer-events:none" onclick="saveRdpSettings()" disabled>Saved</button>
     </div>
   </div>
 
@@ -1076,7 +1076,7 @@
         <div style="margin-top:8px;font-size:12px;color:var(--muted);line-height:1.6">
           These defaults are applied when opening a new SSH session from Remote Access.
         </div>
-        <button class="btn btn-primary" style="margin-top:16px" onclick="saveSshSettings()">Save</button>
+        <button id="ssh-save-btn" class="btn btn-primary" style="margin-top:16px;opacity:.4;pointer-events:none" onclick="saveSshSettings()" disabled>Saved</button>
       </div>
     </div>
   </div>
@@ -3037,6 +3037,27 @@ function loadProtocolSettings() {
   } catch (_) {}
 }
 
+function _setSettingsSaveBtn(id, dirty) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  if (dirty) {
+    btn.disabled = false;
+    btn.style.opacity = '';
+    btn.style.pointerEvents = '';
+    btn.textContent = 'Save';
+  } else {
+    btn.disabled = true;
+    btn.style.opacity = '.4';
+    btn.style.pointerEvents = 'none';
+    btn.textContent = 'Saved';
+  }
+}
+
+document.getElementById('tab-settings-rdp').addEventListener('input', () => _setSettingsSaveBtn('rdp-save-btn', true));
+document.getElementById('tab-settings-rdp').addEventListener('change', () => _setSettingsSaveBtn('rdp-save-btn', true));
+document.getElementById('tab-settings-ssh').addEventListener('input', () => _setSettingsSaveBtn('ssh-save-btn', true));
+document.getElementById('tab-settings-ssh').addEventListener('change', () => _setSettingsSaveBtn('ssh-save-btn', true));
+
 function saveRdpSettings() {
   const res = document.getElementById('rdp-default-resolution')?.value || '1280x800';
   const settings = {
@@ -3056,6 +3077,7 @@ function saveRdpSettings() {
     disable_audio: document.getElementById('rdp-default-disable-audio')?.checked !== false,
   };
   localStorage.setItem('rcommander_rdp_settings', JSON.stringify(settings));
+  _setSettingsSaveBtn('rdp-save-btn', false);
   toast('RDP settings saved');
 }
 
@@ -3064,6 +3086,7 @@ function saveSshSettings() {
     port: parseInt(document.getElementById('ssh-default-port').value) || 22,
   };
   localStorage.setItem('rcommander_ssh_settings', JSON.stringify(settings));
+  _setSettingsSaveBtn('ssh-save-btn', false);
   toast('SSH settings saved');
 }
 
