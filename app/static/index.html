@@ -954,8 +954,8 @@
           <div class="form-group">
             <label>Security Mode</label>
             <select id="rdp-default-security">
-              <option value="nla">NLA (Windows 10/11/Server 2016+)</option>
               <option value="any">Any (auto-negotiate)</option>
+              <option value="nla">NLA (Windows 10/11/Server 2016+)</option>
               <option value="rdp">RDP (legacy, Windows 7/2008)</option>
               <option value="tls">TLS</option>
             </select>
@@ -2884,7 +2884,7 @@ async function connectRemoteAccess() {
       const [w, h] = _getRdpResolution(rdpDef);
       const data = await api('POST', '/api/rdp-session', {
         server_id: +serverId, credential_id: +credId, port,
-        rdp_security: rdpDef.security || 'nla',
+        rdp_security: rdpDef.security || 'any',
         rdp_console: rdpDef.console || false,
         width: w, height: h,
         color_depth: rdpDef.color_depth || 32,
@@ -3061,7 +3061,7 @@ document.getElementById('tab-settings-ssh').addEventListener('change', () => _se
 function saveRdpSettings() {
   const res = document.getElementById('rdp-default-resolution')?.value || '1280x800';
   const settings = {
-    security: document.getElementById('rdp-default-security')?.value || 'nla',
+    security: document.getElementById('rdp-default-security')?.value || 'any',
     port: parseInt(document.getElementById('rdp-default-port')?.value) || 3389,
     console: document.getElementById('rdp-default-console')?.checked || false,
     resolution: res,
