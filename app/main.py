@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.8"
+APP_VERSION = "1.5.9"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -254,6 +254,7 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "console": "true" if session.get("rdp_console") else "false",
         "timezone": "UTC",
         "disable-audio": "true",
+        "disable-auth": "false",
         "enable-font-smoothing": "false",
         "enable-wallpaper": "true",
         "enable-theming": "true",
@@ -266,8 +267,8 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "resize-method": "display-update",
         "cursor": "local",
     }
-    # Echo VERSION_* tokens back to guacd to accept the negotiated protocol version
-    connect_args = [p if p.startswith("VERSION_") else rdp_defaults.get(p, "") for p in param_names]
+    # Send "" for VERSION_* slots — guacd uses legacy-compatible mode which works reliably
+    connect_args = [rdp_defaults.get(p, "") for p in param_names]
     print(f"[RDP {host_label}] connecting with security={rdp_defaults['security']} console={rdp_defaults['console']} user={rdp_defaults['username']!r}")
     writer.write(_guac_encode("connect", *connect_args).encode())
     await writer.drain()
