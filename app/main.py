@@ -271,8 +271,8 @@ _RDP_PAGE_TMPL = """\
 body { background:#000; display:flex; flex-direction:column; height:100vh; font-family:system-ui,sans-serif; overflow:hidden; }
 #bar { background:#161b22; border-bottom:1px solid #30363d; padding:8px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0; color:#e6edf3; font-size:13px; }
 #status { margin-left:auto; font-size:12px; color:#8b949e; }
-#display { flex:1; overflow:hidden; position:relative; cursor:none; }
-#display div { width:100% !important; height:100% !important; }
+#display { flex:1; overflow:hidden; position:relative; }
+#display > div { position:absolute; top:0; left:0; }
 </style>
 </head>
 <body>
@@ -307,7 +307,8 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
     var client = new Guacamole.Client(tunnel);
 
     var displayDiv = document.getElementById('display');
-    displayDiv.appendChild(client.getDisplay().getElement());
+    var displayEl = client.getDisplay().getElement();
+    displayDiv.appendChild(displayEl);
 
     client.onerror = function(err) {
       status.textContent = 'Error: ' + (err.message || 'Connection failed');
@@ -318,6 +319,7 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
       if (state === Guacamole.Tunnel.State.OPEN) {
         status.textContent = 'Connected';
         status.style.color = '#3fb950';
+        scaleDisplay();
       } else if (state === Guacamole.Tunnel.State.CLOSED) {
         if (status.style.color !== 'rgb(248, 81, 73)') {
           status.textContent = 'Disconnected';
@@ -330,7 +332,8 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
     window.onunload = function() { client.disconnect(); };
 
     var display = client.getDisplay();
-    var mouse = new Guacamole.Mouse(display.getElement());
+    display.showCursor(true);
+    var mouse = new Guacamole.Mouse(displayEl);
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = function(mouseState) {
       client.sendMouseState(mouseState);
     };
