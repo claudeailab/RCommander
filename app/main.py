@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.10"
+APP_VERSION = "1.6.11"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -241,6 +241,42 @@ async def _guac_read_instr(reader: asyncio.StreamReader) -> str:
     """Read one complete Guacamole instruction (up to and including ';')."""
     data = await reader.readuntil(b";")
     return data.decode("utf-8", errors="replace")
+
+
+def _guac_last_instr_end(buf: bytes) -> int:
+    """Return the byte index of the ';' that ends the last complete Guacamole
+    instruction in *buf*, or -1 if *buf* contains no complete instruction.
+
+    Parses the LENGTH.VALUE structure so that a ';' that appears inside a
+    value (e.g. clipboard text) is never mistaken for an instruction boundary.
+    """
+    pos = 0
+    last_end = -1
+    n = len(buf)
+    while pos < n:
+        p = pos
+        while True:
+            dot = buf.find(b".", p)
+            if dot == -1:
+                return last_end
+            length_bytes = buf[p:dot]
+            try:
+                length = int(length_bytes)
+            except ValueError:
+                return last_end
+            val_end = dot + 1 + length
+            if val_end >= n:
+                return last_end
+            term = buf[val_end]
+            if term == 0x3B:   # ord(";")
+                last_end = val_end
+                pos = val_end + 1
+                break
+            elif term == 0x2C:  # ord(",")
+                p = val_end + 1
+            else:
+                return last_end
+    return last_end
 
 
 async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, session: dict) -> str:
@@ -1140,21 +1176,30 @@ async def rdp_ws_proxy(websocket: WebSocket, token: str):
             pass
 
     async def tcp_to_ws():
-        chunks = 0
-        total = 0
+        # guacamole-common-js WebSocketTunnel.onmessage is stateless across frames:
+        # it re-initialises its parser on every message, so a Guacamole instruction
+        # that spans two WebSocket frames is silently corrupted.  We must only send
+        # complete instructions (ending at ';') per frame.
+        leftover = b""
         try:
             while True:
                 data = await reader.read(65536)
                 if not data:
-                    print(f"[RDP {host_label}] guacd closed after {chunks} chunks / {total} bytes")
                     break
-                chunks += 1
-                total += len(data)
-                if chunks <= 3:
-                    print(f"[RDP {host_label}] chunk #{chunks}: {len(data)} bytes | preview: {data[:80]!r}")
-                await websocket.send_text(data.decode("utf-8", errors="replace"))
+                buf = leftover + data
+                end = _guac_last_instr_end(buf)
+                if end < 0:
+                    leftover = buf
+                    continue
+                await websocket.send_text(buf[:end + 1].decode("utf-8", errors="replace"))
+                leftover = buf[end + 1:]
         except Exception as e:
-            print(f"[RDP {host_label}] proxy error after {chunks} chunks: {e}")
+            print(f"[RDP {host_label}] tcp_to_ws error: {e}")
+        if leftover:
+            try:
+                await websocket.send_text(leftover.decode("utf-8", errors="replace"))
+            except Exception:
+                pass
 
     tasks = [asyncio.ensure_future(ws_to_tcp()), asyncio.ensure_future(tcp_to_ws())]
     await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
