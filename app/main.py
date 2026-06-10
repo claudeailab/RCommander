@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.9"
+APP_VERSION = "1.6.10"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -286,9 +286,9 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "enable-full-window-drag": "false",
         "enable-desktop-composition": "true" if session.get("enable_desktop_composition", True) else "false",
         "enable-menu-animations": "false",
-        "disable-bitmap-caching": "false",
-        "disable-offscreen-caching": "false",
-        "disable-glyph-caching": "false",
+        "disable-bitmap-caching": "true",
+        "disable-offscreen-caching": "true",
+        "disable-glyph-caching": "true",
         "resize-method": session.get("resize_method", "display-update"),
         "cursor": session.get("cursor", "local"),
     }
