@@ -860,7 +860,10 @@
             <option value="rdp">RDP (legacy, Windows 7/2008)</option>
             <option value="tls">TLS</option>
           </select>
-          <div class="hint">Try "Any" if NLA fails with a black screen</div>
+        </div>
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="ra-rdp-console" style="width:auto;margin:0">
+          <label for="ra-rdp-console" style="margin:0;cursor:pointer">Console session (fix black screen)</label>
         </div>
       </div>
       <div style="margin-top:8px">
@@ -2612,7 +2615,8 @@ async function connectRemoteAccess() {
   } else {
     try {
       const rdpSecurity = document.getElementById('ra-rdp-security')?.value || 'nla';
-      const data = await api('POST', '/api/rdp-session', { server_id: +serverId, credential_id: +credId, port, rdp_security: rdpSecurity });
+      const rdpConsole = document.getElementById('ra-rdp-console')?.checked || false;
+      const data = await api('POST', '/api/rdp-session', { server_id: +serverId, credential_id: +credId, port, rdp_security: rdpSecurity, rdp_console: rdpConsole });
       window.open('/rdp/' + data.token, '_blank');
     } catch (e) {
       toast('RDP error: ' + e.message, 'fail');
