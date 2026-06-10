@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.6"
+APP_VERSION = "1.6.7"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -134,6 +134,8 @@ _VNC_PAGE_TMPL = """\
 body { background: #000; display: flex; flex-direction: column; height: 100vh; font-family: system-ui, sans-serif; }
 #bar { background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 16px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; color: #e6edf3; font-size: 13px; }
 #status { margin-left: auto; font-size: 12px; }
+#disc-btn { background:none; border:1px solid #da3633; color:#da3633; border-radius:5px; padding:3px 12px; font-size:12px; cursor:pointer; font-weight:600; }
+#disc-btn:hover { background:rgba(218,54,51,.15); }
 #vnc { flex: 1; overflow: hidden; }
 #vnc > div, #vnc canvas { width: 100% !important; height: 100% !important; }
 </style>
@@ -147,6 +149,7 @@ body { background: #000; display: flex; flex-direction: column; height: 100vh; f
   </svg>
   VNC — %%NAME%%
   <span id="status" style="color:#8b949e">Connecting…</span>
+  <button id="disc-btn" onclick="window._vncDisconnect && window._vncDisconnect()">Disconnect</button>
 </div>
 <div id="vnc"><div id="t"></div></div>
 <script type="module">
@@ -168,6 +171,7 @@ rfb.addEventListener('disconnect', ev => {
 rfb.addEventListener('credentialsrequired', () => {
   rfb.sendCredentials({ password: prompt('VNC Password:') || '' });
 });
+window._vncDisconnect = function() { try { rfb.disconnect(); } catch(_) {} window.close(); };
 </script>
 </body>
 </html>"""
@@ -250,7 +254,10 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
     param_names = elements[1:]  # first element is opcode "args"
     print(f"[RDP {host_label}] guacd args ({len(param_names)}): {param_names}")
 
-    writer.write(_guac_encode("size", "1280", "800", "96").encode())
+    w = str(session.get("width", 1280))
+    h = str(session.get("height", 800))
+    dpi = str(session.get("dpi", 96))
+    writer.write(_guac_encode("size", w, h, dpi).encode())
     writer.write(_guac_encode("audio").encode())
     writer.write(_guac_encode("video").encode())
     writer.write(_guac_encode("image", "image/png", "image/jpeg").encode())
@@ -313,6 +320,8 @@ _SSH_PAGE_TMPL = """\
 body { background:#0d1117; display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 #bar { background:#161b22; border-bottom:1px solid #30363d; padding:8px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0; color:#e6edf3; font-size:13px; }
 #status { margin-left:auto; font-size:12px; color:#8b949e; }
+#disc-btn { background:none; border:1px solid #da3633; color:#da3633; border-radius:5px; padding:3px 12px; font-size:12px; cursor:pointer; font-weight:600; }
+#disc-btn:hover { background:rgba(218,54,51,.15); }
 #terminal { flex:1; overflow:hidden; padding:4px; }
 </style>
 </head>
@@ -321,6 +330,7 @@ body { background:#0d1117; display:flex; flex-direction:column; height:100vh; ov
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
   SSH — %%NAME%%
   <span id="status">Connecting…</span>
+  <button id="disc-btn" onclick="ws && ws.close(); window.close()">Disconnect</button>
 </div>
 <div id="terminal"></div>
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
@@ -362,8 +372,10 @@ _RDP_PAGE_TMPL = """\
 body { background:#000; display:flex; flex-direction:column; height:100vh; font-family:system-ui,sans-serif; overflow:hidden; }
 #bar { background:#161b22; border-bottom:1px solid #30363d; padding:8px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0; color:#e6edf3; font-size:13px; }
 #status { margin-left:auto; font-size:12px; color:#8b949e; }
+#disc-btn { background:none; border:1px solid #da3633; color:#da3633; border-radius:5px; padding:3px 12px; font-size:12px; cursor:pointer; font-weight:600; }
+#disc-btn:hover { background:rgba(218,54,51,.15); }
 #display { flex:1; overflow:hidden; position:relative; cursor:none; }
-#display > div { position:absolute; top:0; left:0; }
+#display > div { position:absolute !important; top:0 !important; left:0 !important; overflow:hidden; }
 </style>
 </head>
 <body>
@@ -375,31 +387,42 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
   </svg>
   RDP — %%NAME%%
   <span id="status">Connecting…</span>
+  <button id="disc-btn" onclick="window._rdpDisconnect && window._rdpDisconnect()">Disconnect</button>
 </div>
 <div id="display"></div>
 <script type="module">
 (async function() {
-  const status = document.getElementById('status');
-  let Guacamole;
+  var status = document.getElementById('status');
+  var displayDiv = document.getElementById('display');
+
+  var Guacamole;
   try {
-    const mod = await import('/guacamole-common.js');
+    var mod = await import('/guacamole-common.js');
     Guacamole = mod.default;
-    if (!Guacamole || !Guacamole.WebSocketTunnel) throw new Error('Guacamole.WebSocketTunnel not found in module');
+    if (!Guacamole || !Guacamole.WebSocketTunnel) throw new Error('Guacamole.WebSocketTunnel not found');
   } catch(e) {
     status.textContent = 'Library error: ' + e.message;
     status.style.color = '#f85149';
     return;
   }
+
+  // Use the actual display-area dimensions so guacd negotiates the right resolution
+  // with Windows from the start — avoids the GDI partial-paint / missing-background issue
+  var initW = displayDiv.offsetWidth  || window.innerWidth  || 1280;
+  var initH = displayDiv.offsetHeight || (window.innerHeight - document.getElementById('bar').offsetHeight) || 800;
+
   try {
     var proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    var wsUrl = proto + '://' + location.host + '/ws/rdp/%%TOKEN%%';
+    var wsUrl = proto + '://' + location.host + '/ws/rdp/%%TOKEN%%?w=' + initW + '&h=' + initH;
 
     var tunnel = new Guacamole.WebSocketTunnel(wsUrl);
     var client = new Guacamole.Client(tunnel);
-
-    var displayDiv = document.getElementById('display');
-    var displayEl = client.getDisplay().getElement();
+    var display = client.getDisplay();
+    var displayEl = display.getElement();
     displayDiv.appendChild(displayEl);
+
+    window._rdpDisconnect = function() { try { client.disconnect(); } catch(_) {} window.close(); };
+    window.onunload = function() { try { client.disconnect(); } catch(_) {} };
 
     client.onerror = function(err) {
       status.textContent = 'Error: ' + (err.message || 'Connection failed');
@@ -410,14 +433,6 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
       if (state === Guacamole.Tunnel.State.OPEN) {
         status.textContent = 'Connected';
         status.style.color = '#3fb950';
-        scaleDisplay();
-        // After 3s the desktop is fully loaded — resize to actual window dimensions
-        // to force Windows to repaint the full screen (fixes incomplete background)
-        setTimeout(function() {
-          var w = displayDiv.clientWidth || 1280;
-          var h = displayDiv.clientHeight || 800;
-          if (w !== 1280 || h !== 800) { client.sendSize(w, h); }
-        }, 3000);
       } else if (state === Guacamole.Tunnel.State.CLOSED) {
         if (status.style.color !== 'rgb(248, 81, 73)') {
           status.textContent = 'Disconnected';
@@ -426,12 +441,24 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
       }
     };
 
-    client.connect();
-    window.onunload = function() { client.disconnect(); };
+    // Scale the display canvas to fit the container when guacd changes its size
+    display.onresize = function() {
+      var cw = displayDiv.clientWidth, ch = displayDiv.clientHeight;
+      var dw = display.getWidth(),    dh = display.getHeight();
+      if (cw && ch && dw && dh) display.scale(Math.min(cw / dw, ch / dh));
+    };
 
-    var display = client.getDisplay();
+    // On browser resize, tell guacd the new dimensions so Windows redraws at native size
+    window.addEventListener('resize', function() {
+      var w = displayDiv.clientWidth, h = displayDiv.clientHeight;
+      if (w > 0 && h > 0) client.sendSize(w, h);
+    });
+
+    client.connect();
+
     display.showCursor(true);
     displayEl.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
     var mouse = new Guacamole.Mouse(displayEl);
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = function(mouseState) {
       client.sendMouseState(mouseState);
@@ -439,19 +466,8 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
 
     var keyboard = new Guacamole.Keyboard(document);
     keyboard.onkeydown = function(keysym) { client.sendKeyEvent(1, keysym); };
-    keyboard.onkeyup = function(keysym) { client.sendKeyEvent(0, keysym); };
+    keyboard.onkeyup   = function(keysym) { client.sendKeyEvent(0, keysym); };
 
-    function scaleDisplay() {
-      var w = displayDiv.clientWidth;
-      var h = displayDiv.clientHeight;
-      var dw = display.getWidth();
-      var dh = display.getHeight();
-      if (dw && dh) {
-        display.scale(Math.min(w / dw, h / dh));
-      }
-    }
-    window.addEventListener('resize', scaleDisplay);
-    display.onresize = scaleDisplay;
   } catch(e) {
     status.textContent = 'JS error: ' + e.message;
     status.style.color = '#f85149';
@@ -1073,6 +1089,17 @@ async def rdp_ws_proxy(websocket: WebSocket, token: str):
     if not session:
         await websocket.close(code=1008)
         return
+
+    # Override width/height with actual browser viewport passed as ?w=&h=
+    try:
+        bw = int(websocket.query_params.get("w", 0))
+        bh = int(websocket.query_params.get("h", 0))
+        if bw > 0 and bh > 0:
+            session = dict(session)
+            session["width"] = bw
+            session["height"] = bh
+    except (ValueError, TypeError):
+        pass
 
     await websocket.accept(subprotocol="guacamole")
 
