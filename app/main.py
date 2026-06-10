@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.5.3"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -986,6 +986,8 @@ async def rdp_ws_proxy(websocket: WebSocket, token: str):
             pass
         return
 
+    host_label = f"{session['host']}:{session['port']}"
+
     async def ws_to_tcp():
         try:
             while True:
@@ -996,14 +998,21 @@ async def rdp_ws_proxy(websocket: WebSocket, token: str):
             pass
 
     async def tcp_to_ws():
+        chunks = 0
+        total = 0
         try:
             while True:
                 data = await reader.read(65536)
                 if not data:
+                    print(f"[RDP {host_label}] guacd closed after {chunks} chunks / {total} bytes")
                     break
+                chunks += 1
+                total += len(data)
+                if chunks <= 3:
+                    print(f"[RDP {host_label}] chunk #{chunks}: {len(data)} bytes | preview: {data[:80]!r}")
                 await websocket.send_text(data.decode("utf-8", errors="replace"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[RDP {host_label}] proxy error after {chunks} chunks: {e}")
 
     tasks = [asyncio.ensure_future(ws_to_tcp()), asyncio.ensure_future(tcp_to_ws())]
     await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
