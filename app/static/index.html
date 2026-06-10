@@ -829,29 +829,28 @@
   <!-- REMOTE ACCESS -->
   <div id="tab-remote-access" style="display:none">
     <div class="topbar"><span class="page-title">Remote Access</span></div>
-    <div class="content" style="max-width:500px">
+    <div class="content" style="max-width:520px">
       <div class="form-group">
         <label>Server</label>
-        <select id="ra-server"></select>
+        <div id="ra-server-tree" class="folder-tree" style="max-height:260px;border:1px solid var(--border);border-radius:6px;overflow-y:auto;padding:4px 0;background:var(--surface)"></div>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Protocol</label>
-          <select id="ra-protocol" onchange="raProtocolChange()">
-            <option value="vnc">VNC</option>
-            <option value="rdp">RDP</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Port</label>
-          <input id="ra-port" type="number" value="5900" style="width:100%">
-        </div>
+      <div id="ra-selected-indicator" style="display:none;padding:7px 12px;background:var(--surface2);border-radius:6px;margin-bottom:4px;font-size:13px;align-items:center;gap:6px">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+        <span id="ra-selected-name" style="font-weight:500"></span>
+      </div>
+      <div class="form-group">
+        <label>Protocol</label>
+        <select id="ra-protocol" onchange="raProtocolChange()">
+          <option value="rdp">RDP</option>
+          <option value="vnc">VNC</option>
+          <option value="ssh">SSH</option>
+        </select>
       </div>
       <div class="form-group">
         <label>Credentials</label>
         <select id="ra-credential"></select>
       </div>
-      <div id="ra-rdp-options" style="display:none">
+      <div id="ra-rdp-options">
         <div class="form-group">
           <label>RDP Security</label>
           <select id="ra-rdp-security">
@@ -863,18 +862,24 @@
         </div>
         <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
           <input type="checkbox" id="ra-rdp-console" style="width:auto;margin:0">
-          <label for="ra-rdp-console" style="margin:0;cursor:pointer">Console session (fix black screen)</label>
+          <label for="ra-rdp-console" style="margin:0;cursor:pointer">Console session</label>
+        </div>
+      </div>
+      <div id="ra-vnc-options" style="display:none">
+        <div class="form-group">
+          <label>DSM Plugin (optional)</label>
+          <select id="ra-vnc-dsm"><option value="">— none —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Client Key (optional)</label>
+          <select id="ra-vnc-client-key"><option value="">— none —</option></select>
         </div>
       </div>
       <div style="margin-top:8px">
-        <button class="btn btn-run" onclick="connectRemoteAccess()">
+        <button class="btn btn-run" id="ra-connect-btn" onclick="connectRemoteAccess()">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           Connect
         </button>
-      </div>
-      <div style="margin-top:12px;font-size:12px;color:var(--muted);line-height:1.6">
-        <strong style="color:var(--text)">VNC</strong> — opens an in-browser noVNC session in a new tab<br>
-        <strong style="color:var(--text)">RDP</strong> — opens a full in-browser RDP session in a new tab (powered by Apache Guacamole)
       </div>
     </div>
   </div>
@@ -1579,26 +1584,6 @@ function openModal(type, id = null, defaultGroup = '') {
         <label>Description</label>
         <input id="f-desc" value="${escape(src?.description ?? '')}" placeholder="Optional">
       </div>
-      <div class="form-group" id="vnc-file-fields">
-        <label style="color:var(--accent-h)">VNC Authentication Files</label>
-        <div class="form-row" style="margin-top:6px">
-          <div class="form-group">
-            <label>DSM Plugin File</label>
-            <select id="f-vnc-dsm">
-              <option value="">— none —</option>
-              ${state.vncFiles.filter(f=>f.file_type==='dsm').map(f=>`<option value="${f.id}" ${src?.vnc_dsm_file_id===f.id?'selected':''}>${escape(f.name)}</option>`).join('')}
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Client Key File</label>
-            <select id="f-vnc-client-key">
-              <option value="">— none —</option>
-              ${state.vncFiles.filter(f=>f.file_type==='client_key').map(f=>`<option value="${f.id}" ${src?.vnc_client_key_file_id===f.id?'selected':''}>${escape(f.name)}</option>`).join('')}
-            </select>
-          </div>
-        </div>
-        <div class="hint">Used for UltraVNC SecureVNC / client authentication. Upload files under VNC Files.</div>
-      </div>
       ${modalFooter('saveServer')}`;
   }
 
@@ -1723,13 +1708,9 @@ async function saveEntity(resource, label, body) {
 
 async function saveServer() {
   const credVal = document.getElementById('f-credential')?.value;
-  const dsmVal = document.getElementById('f-vnc-dsm')?.value;
-  const ckVal = document.getElementById('f-vnc-client-key')?.value;
   const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22,
     type: val('f-type'), description: val('f-desc'), server_group: val('f-group'),
-    credential_id: credVal ? parseInt(credVal) : null,
-    vnc_dsm_file_id: dsmVal ? parseInt(dsmVal) : null,
-    vnc_client_key_file_id: ckVal ? parseInt(ckVal) : null };
+    credential_id: credVal ? parseInt(credVal) : null };
   if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
   await saveEntity('servers', 'Server', body);
 }
@@ -2581,46 +2562,126 @@ async function runBulkServer(server, cmd, outEl) {
 
 // ── Remote Access ─────────────────────────────────────────────────────────────
 
+let _ra_selectedServerId = null;
+const _ra_expandedFolders = new Set();
+
+function renderRaTree() {
+  const container = document.getElementById('ra-server-tree');
+  if (!container) return;
+  const { nodes, roots } = buildFolderNodes();
+  function serverNode(s, depth) {
+    const selected = _ra_selectedServerId == s.id;
+    const pad = 10 + depth * 16;
+    return `<div class="folder-node${selected ? ' f-selected' : ''}" onclick="raSelectServer(${s.id})"
+      style="padding:5px 12px 5px ${pad}px;cursor:pointer;display:flex;align-items:center;gap:8px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" opacity=".6"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(s.name)}</span>
+      <code style="color:var(--blue);font-size:11px;flex-shrink:0">${escape(s.host)}</code>
+    </div>`;
+  }
+  function folderNode(path, depth) {
+    const node = nodes[path];
+    const label = path.split('/').pop();
+    const expanded = _ra_expandedFolders.has(path);
+    const pad = 8 + depth * 16;
+    let html = `<div class="folder-node" onclick="raToggleFolder(event,'${escape(path)}')"
+      style="padding:5px 12px 5px ${pad}px;cursor:pointer;display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;font-weight:600;letter-spacing:.3px">
+      <span style="font-size:9px">${expanded ? '▼' : '▶'}</span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      ${escape(label)}
+    </div>`;
+    if (expanded) {
+      html += node.servers.map(s => serverNode(s, depth + 1)).join('');
+      for (const child of [...node.children].sort()) html += folderNode(child, depth + 1);
+    }
+    return html;
+  }
+  let html = state.servers.filter(s => !s.server_group).map(s => serverNode(s, 0)).join('');
+  for (const root of [...roots].sort()) html += folderNode(root, 0);
+  container.innerHTML = html || '<div style="padding:12px 16px;color:var(--muted);font-size:13px">No servers configured.</div>';
+}
+
+function raToggleFolder(e, path) {
+  e.stopPropagation();
+  if (_ra_expandedFolders.has(path)) _ra_expandedFolders.delete(path);
+  else _ra_expandedFolders.add(path);
+  renderRaTree();
+}
+
+function raSelectServer(id) {
+  _ra_selectedServerId = id;
+  const server = state.servers.find(s => s.id == id);
+  const ind = document.getElementById('ra-selected-indicator');
+  const nameEl = document.getElementById('ra-selected-name');
+  if (ind && server) { nameEl.textContent = server.name + ' (' + server.host + ')'; ind.style.display = 'flex'; }
+  if (server) {
+    const eff = getEffectiveCredential(server);
+    const credSel = document.getElementById('ra-credential');
+    if (eff && credSel) credSel.value = eff.id;
+  }
+  renderRaTree();
+}
+
 function renderRemoteAccess() {
-  const serverSel = document.getElementById('ra-server');
   const credSel = document.getElementById('ra-credential');
-  if (!serverSel || !credSel) return;
-  const sv = serverSel.value, cv = credSel.value;
-  serverSel.innerHTML = '<option value="">— select server —</option>' +
-    state.servers.map(s => `<option value="${s.id}" ${s.id == sv ? 'selected' : ''}>${escape(s.name)} (${escape(s.host)})</option>`).join('');
+  if (!credSel) return;
+  const cv = credSel.value;
   credSel.innerHTML = '<option value="">— select credential —</option>' +
     state.credentials.map(c => `<option value="${c.id}" ${c.id == cv ? 'selected' : ''}>${escape(c.name)}</option>`).join('');
+  const dsmSel = document.getElementById('ra-vnc-dsm');
+  const ckSel = document.getElementById('ra-vnc-client-key');
+  if (dsmSel) {
+    const dv = dsmSel.value;
+    dsmSel.innerHTML = '<option value="">— none —</option>' +
+      state.vncFiles.filter(f => f.file_type === 'dsm').map(f => `<option value="${f.id}" ${f.id == dv ? 'selected' : ''}>${escape(f.name)}</option>`).join('');
+  }
+  if (ckSel) {
+    const cv2 = ckSel.value;
+    ckSel.innerHTML = '<option value="">— none —</option>' +
+      state.vncFiles.filter(f => f.file_type === 'client_key').map(f => `<option value="${f.id}" ${f.id == cv2 ? 'selected' : ''}>${escape(f.name)}</option>`).join('');
+  }
+  renderRaTree();
 }
 
 function raProtocolChange() {
   const proto = document.getElementById('ra-protocol').value;
-  document.getElementById('ra-port').value = proto === 'rdp' ? '3389' : '5900';
   document.getElementById('ra-rdp-options').style.display = proto === 'rdp' ? '' : 'none';
+  document.getElementById('ra-vnc-options').style.display = proto === 'vnc' ? '' : 'none';
 }
 
 async function connectRemoteAccess() {
-  const serverId = document.getElementById('ra-server').value;
+  const serverId = _ra_selectedServerId;
   const credId = document.getElementById('ra-credential').value;
   const protocol = document.getElementById('ra-protocol').value;
-  const port = parseInt(document.getElementById('ra-port').value) || (protocol === 'rdp' ? 3389 : 5900);
   if (!serverId) { toast('Select a server', 'fail'); return; }
   if (!credId) { toast('Select credentials', 'fail'); return; }
-  if (protocol === 'vnc') {
-    try {
-      const data = await api('POST', '/api/vnc-session', { server_id: +serverId, credential_id: +credId, port });
-      window.open('/vnc/' + data.token, '_blank');
-    } catch (e) {
-      toast('VNC error: ' + e.message, 'fail');
-    }
-  } else {
-    try {
+  const btn = document.getElementById('ra-connect-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
+  const defaultPorts = { rdp: 3389, vnc: 5900, ssh: 22 };
+  const port = defaultPorts[protocol] || 22;
+  try {
+    if (protocol === 'vnc') {
+      const dsmId = document.getElementById('ra-vnc-dsm')?.value;
+      const ckId = document.getElementById('ra-vnc-client-key')?.value;
+      const data = await api('POST', '/api/vnc-session', { server_id: +serverId, credential_id: +credId, port,
+        vnc_dsm_file_id: dsmId ? +dsmId : null, vnc_client_key_file_id: ckId ? +ckId : null });
+      const w = window.open('/vnc/' + data.token, '_blank');
+      if (!w) toast('Popup blocked — please allow popups for this site', 'fail');
+    } else if (protocol === 'rdp') {
       const rdpSecurity = document.getElementById('ra-rdp-security')?.value || 'nla';
       const rdpConsole = document.getElementById('ra-rdp-console')?.checked || false;
       const data = await api('POST', '/api/rdp-session', { server_id: +serverId, credential_id: +credId, port, rdp_security: rdpSecurity, rdp_console: rdpConsole });
-      window.open('/rdp/' + data.token, '_blank');
-    } catch (e) {
-      toast('RDP error: ' + e.message, 'fail');
+      const w = window.open('/rdp/' + data.token, '_blank');
+      if (!w) toast('Popup blocked — please allow popups for this site', 'fail');
+    } else if (protocol === 'ssh') {
+      const data = await api('POST', '/api/ssh-session', { server_id: +serverId, credential_id: +credId, port });
+      const w = window.open('/ssh/' + data.token, '_blank');
+      if (!w) toast('Popup blocked — please allow popups for this site', 'fail');
     }
+  } catch (e) {
+    toast(protocol.toUpperCase() + ' error: ' + e.message, 'fail');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Connect'; }
   }
 }
 
