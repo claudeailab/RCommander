@@ -2616,7 +2616,7 @@ async function connectRemoteAccess() {
     try {
       const rdpSecurity = document.getElementById('ra-rdp-security')?.value || 'nla';
       const rdpConsole = document.getElementById('ra-rdp-console')?.checked || false;
-      const data = await api('POST', '/api/rdp-session', { server_id: +serverId, credential_id: +credId, port, rdp_security: rdpSecurity, rdp_console: rdpConsole, width: window.screen.availWidth || 1280, height: window.screen.availHeight || 800 });
+      const data = await api('POST', '/api/rdp-session', { server_id: +serverId, credential_id: +credId, port, rdp_security: rdpSecurity, rdp_console: rdpConsole });
       window.open('/rdp/' + data.token, '_blank');
     } catch (e) {
       toast('RDP error: ' + e.message, 'fail');

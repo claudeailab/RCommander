@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -232,9 +232,7 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
     param_names = elements[1:]  # first element is opcode "args"
     print(f"[RDP {host_label}] guacd args ({len(param_names)}): {param_names}")
 
-    width = str(session.get("width", 1280))
-    height = str(session.get("height", 800))
-    writer.write(_guac_encode("size", width, height, "96").encode())
+    writer.write(_guac_encode("size", "1280", "800", "96").encode())
     writer.write(_guac_encode("audio").encode())
     writer.write(_guac_encode("video").encode())
     writer.write(_guac_encode("image", "image/png", "image/jpeg").encode())
@@ -246,8 +244,8 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "port": str(session["port"]),
         "username": session["username"],
         "password": session["password"],
-        "width": width,
-        "height": height,
+        "width": "1280",
+        "height": "800",
         "dpi": "96",
         "color-depth": "32",
         "security": session.get("rdp_security", "nla"),
@@ -345,6 +343,13 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
         status.textContent = 'Connected';
         status.style.color = '#3fb950';
         scaleDisplay();
+        // After 3s the desktop is fully loaded — resize to actual window dimensions
+        // to force Windows to repaint the full screen (fixes incomplete background)
+        setTimeout(function() {
+          var w = displayDiv.clientWidth || 1280;
+          var h = displayDiv.clientHeight || 800;
+          if (w !== 1280 || h !== 800) { client.sendSize(w, h); }
+        }, 3000);
       } else if (state === Guacamole.Tunnel.State.CLOSED) {
         if (status.style.color !== 'rgb(248, 81, 73)') {
           status.textContent = 'Disconnected';
