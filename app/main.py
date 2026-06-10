@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.5"
+APP_VERSION = "1.5.6"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -257,7 +257,7 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "enable-wallpaper": "false",
         "enable-theming": "true",
         "enable-full-window-drag": "false",
-        "enable-desktop-composition": "false",
+        "enable-desktop-composition": "true",
         "enable-menu-animations": "false",
         "disable-glyph-caching": "false",
         "resize-method": "display-update",
