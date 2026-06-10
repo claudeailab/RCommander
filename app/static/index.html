@@ -197,8 +197,8 @@
     gap: 16px;
   }
   .exec-panel h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
-  #exec-folder-path { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
-  #exec-folder-path:empty { display: none; }
+  #exec-folder-path, #ra-folder-path { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+  #exec-folder-path:empty, #ra-folder-path:empty { display: none; }
   .exec-folder-sel { width: 100%; }
   /* ── Custom command select ── */
   .cmd-select { position: relative; width: 100%; }
@@ -836,11 +836,10 @@
     <div class="content" style="max-width:520px">
       <div class="form-group">
         <label>Server</label>
-        <div id="ra-server-tree" class="folder-tree" style="max-height:260px;border:1px solid var(--border);border-radius:6px;overflow-y:auto;padding:4px 0;background:var(--surface)"></div>
-      </div>
-      <div id="ra-selected-indicator" style="display:none;padding:7px 12px;background:var(--surface2);border-radius:6px;margin-bottom:4px;font-size:13px;align-items:center;gap:6px">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-        <span id="ra-selected-name" style="font-weight:500"></span>
+        <div id="ra-folder-path"></div>
+        <select id="ra-server" onchange="raServerChange()">
+          <option value="">— select server —</option>
+        </select>
       </div>
       <div class="form-group">
         <label>Protocol</label>
@@ -852,7 +851,14 @@
       </div>
       <div class="form-group">
         <label>Credentials</label>
-        <select id="ra-credential"></select>
+        <input type="hidden" id="ra-credential" value="">
+        <div class="cmd-select" id="ra-cred-custom">
+          <div class="cmd-select-trigger" onclick="toggleRaCredSelect()">
+            <span id="ra-cred-label" style="color:var(--muted)">— select credential —</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+          <div class="cmd-select-menu" id="ra-cred-menu"></div>
+        </div>
       </div>
       <div id="ra-rdp-options">
         <div class="form-group">
@@ -892,7 +898,7 @@
   <div id="tab-vnc-files" style="display:none">
     <div class="settings-subnav" id="settings-subnav-vnc-files"></div>
     <div class="topbar">
-      <span class="page-title">VNC Files</span>
+      <span class="page-title">VNC</span>
     </div>
     <div class="content" style="max-width:700px">
       <div class="card" style="padding:20px;margin-bottom:16px">
@@ -951,25 +957,116 @@
     <div class="topbar"><span class="page-title">RDP Settings</span></div>
     <div class="content" style="max-width:520px">
       <div class="card" style="padding:20px">
-        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Default RDP Options</div>
-        <div class="form-group">
-          <label>Default Security Mode</label>
-          <select id="rdp-default-security">
-            <option value="nla">NLA (Windows 10/11/Server 2016+)</option>
-            <option value="any">Any (auto-negotiate)</option>
-            <option value="rdp">RDP (legacy, Windows 7/2008)</option>
-            <option value="tls">TLS</option>
-          </select>
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Connection</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Security Mode</label>
+            <select id="rdp-default-security">
+              <option value="nla">NLA (Windows 10/11/Server 2016+)</option>
+              <option value="any">Any (auto-negotiate)</option>
+              <option value="rdp">RDP (legacy, Windows 7/2008)</option>
+              <option value="tls">TLS</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Default Port</label>
+            <input id="rdp-default-port" type="number" value="3389" min="1" max="65535" style="max-width:120px">
+          </div>
         </div>
         <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
           <input type="checkbox" id="rdp-default-console" style="width:auto;margin:0">
-          <label for="rdp-default-console" style="margin:0;cursor:pointer">Console session by default</label>
+          <label for="rdp-default-console" style="margin:0;cursor:pointer">Console / admin session</label>
         </div>
-        <div style="margin-top:8px;font-size:12px;color:var(--muted);line-height:1.6">
-          These defaults are applied when opening a new RDP session from Remote Access. You can override them per-session on the Remote Access page.
-        </div>
-        <button class="btn btn-primary" style="margin-top:16px" onclick="saveRdpSettings()">Save</button>
       </div>
+      <div class="card" style="padding:20px;margin-top:12px">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Display</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Resolution</label>
+            <select id="rdp-default-resolution" onchange="_rdpResolutionChange()">
+              <option value="1280x800">1280 × 800</option>
+              <option value="1280x1024">1280 × 1024</option>
+              <option value="1366x768">1366 × 768</option>
+              <option value="1440x900">1440 × 900</option>
+              <option value="1600x900">1600 × 900</option>
+              <option value="1920x1080">1920 × 1080</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Color Depth</label>
+            <select id="rdp-default-color-depth">
+              <option value="32">32-bit (true color)</option>
+              <option value="24">24-bit</option>
+              <option value="16">16-bit (high color)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row" id="rdp-custom-res-row" style="display:none">
+          <div class="form-group">
+            <label>Width (px)</label>
+            <input id="rdp-custom-width" type="number" value="1280" min="640" max="4096">
+          </div>
+          <div class="form-group">
+            <label>Height (px)</label>
+            <input id="rdp-custom-height" type="number" value="800" min="480" max="4096">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>DPI</label>
+            <select id="rdp-default-dpi">
+              <option value="96">96 (100%)</option>
+              <option value="120">120 (125%)</option>
+              <option value="144">144 (150%)</option>
+              <option value="192">192 (200%)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Resize Method</label>
+            <select id="rdp-default-resize-method">
+              <option value="display-update">Display update</option>
+              <option value="reconnect">Reconnect</option>
+              <option value="none">None</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="padding:20px;margin-top:12px">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Experience</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+            <input type="checkbox" id="rdp-default-wallpaper" style="width:auto;margin:0" checked>
+            <span>Show desktop wallpaper</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+            <input type="checkbox" id="rdp-default-composition" style="width:auto;margin:0" checked>
+            <span>Desktop composition (Aero / DWM)</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+            <input type="checkbox" id="rdp-default-font-smoothing" style="width:auto;margin:0">
+            <span>Font smoothing (ClearType)</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+            <input type="checkbox" id="rdp-default-disable-audio" style="width:auto;margin:0" checked>
+            <span>Disable remote audio</span>
+          </label>
+        </div>
+      </div>
+      <div class="card" style="padding:20px;margin-top:12px">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Input</div>
+        <div class="form-group">
+          <label>Cursor</label>
+          <select id="rdp-default-cursor">
+            <option value="local">Local (rendered by browser)</option>
+            <option value="remote">Remote (sent by server)</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:8px;font-size:12px;color:var(--muted);line-height:1.6">
+        These defaults apply when opening a new RDP session from Remote Access.
+      </div>
+      <button class="btn btn-primary" style="margin-top:16px" onclick="saveRdpSettings()">Save</button>
     </div>
   </div>
 
@@ -1547,7 +1644,7 @@ const SETTINGS_SUBNAV_HTML = `
   <button class="settings-pill" data-subtab="servers" onclick="switchTab('servers')">Servers</button>
   <button class="settings-pill" data-subtab="credentials" onclick="switchTab('credentials')">Credentials</button>
   <button class="settings-pill" data-subtab="commands" onclick="switchTab('commands')">Commands</button>
-  <button class="settings-pill" data-subtab="vnc-files" onclick="switchTab('vnc-files')">VNC Files</button>
+  <button class="settings-pill" data-subtab="vnc-files" onclick="switchTab('vnc-files')">VNC</button>
   <button class="settings-pill" data-subtab="settings-rdp" onclick="switchTab('settings-rdp')">RDP</button>
   <button class="settings-pill" data-subtab="settings-ssh" onclick="switchTab('settings-ssh')">SSH</button>
 `;
@@ -2642,72 +2739,115 @@ async function runBulkServer(server, cmd, outEl) {
 
 // ── Remote Access ─────────────────────────────────────────────────────────────
 
-let _ra_selectedServerId = null;
-const _ra_expandedFolders = new Set();
+let _raPath = null;
 
-function renderRaTree() {
-  const container = document.getElementById('ra-server-tree');
+function _raChildFolders(parentPath) {
+  const prefix = parentPath === '' ? '' : parentPath + '/';
+  const depth  = parentPath === '' ? 0 : parentPath.split('/').length;
+  return state.groups
+    .filter(g => parentPath === '' ? g.split('/').length === 1 : g.startsWith(prefix) && g.split('/').length === depth + 1)
+    .sort();
+}
+
+function _renderRaFolderPath() {
+  const container = document.getElementById('ra-folder-path');
   if (!container) return;
-  const { nodes, roots } = buildFolderNodes();
-  function serverNode(s, depth) {
-    const selected = _ra_selectedServerId == s.id;
-    const pad = 10 + depth * 16;
-    return `<div class="folder-node${selected ? ' f-selected' : ''}" onclick="raSelectServer(${s.id})"
-      style="padding:5px 12px 5px ${pad}px;cursor:pointer;display:flex;align-items:center;gap:8px">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" opacity=".6"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(s.name)}</span>
-      <code style="color:var(--blue);font-size:11px;flex-shrink:0">${escape(s.host)}</code>
-    </div>`;
-  }
-  function folderNode(path, depth) {
-    const node = nodes[path];
-    const label = path.split('/').pop();
-    const expanded = _ra_expandedFolders.has(path);
-    const pad = 8 + depth * 16;
-    let html = `<div class="folder-node" onclick="raToggleFolder(event,'${escape(path)}')"
-      style="padding:5px 12px 5px ${pad}px;cursor:pointer;display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;font-weight:600;letter-spacing:.3px">
-      <span style="font-size:9px">${expanded ? '▼' : '▶'}</span>
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-      ${escape(label)}
-    </div>`;
-    if (expanded) {
-      html += node.servers.map(s => serverNode(s, depth + 1)).join('');
-      for (const child of [...node.children].sort()) html += folderNode(child, depth + 1);
+  const levels = _raPath ? _raPath.split('/').map((_, i, arr) => arr.slice(0, i + 1).join('/')) : [];
+  let html = '';
+  const topFolders = _raChildFolders('');
+  if (topFolders.length > 0) {
+    const topVal = levels.length > 0 ? levels[0] : '';
+    html += `<select class="exec-folder-sel" data-level="0" onchange="_onRaFolderChange(this)">
+      <option value="">— select folder —</option>` +
+      topFolders.map(f => `<option value="${escape(f)}" ${f===topVal?'selected':''}>${escape(f)}</option>`).join('') +
+      `</select>`;
+    for (let i = 0; i < levels.length; i++) {
+      const children = _raChildFolders(levels[i]);
+      if (children.length === 0) break;
+      const childVal = levels[i + 1] || '';
+      html += `<select class="exec-folder-sel" data-level="${i+1}" onchange="_onRaFolderChange(this)">
+        <option value="">— select subfolder —</option>` +
+        children.map(f => `<option value="${escape(f)}" ${f===childVal?'selected':''}>${escape(f.split('/').pop())}</option>`).join('') +
+        `</select>`;
     }
-    return html;
   }
-  let html = state.servers.filter(s => !s.server_group).map(s => serverNode(s, 0)).join('');
-  for (const root of [...roots].sort()) html += folderNode(root, 0);
-  container.innerHTML = html || '<div style="padding:12px 16px;color:var(--muted);font-size:13px">No servers configured.</div>';
+  container.innerHTML = html;
+  _updateRaServerOptions();
 }
 
-function raToggleFolder(e, path) {
-  e.stopPropagation();
-  if (_ra_expandedFolders.has(path)) _ra_expandedFolders.delete(path);
-  else _ra_expandedFolders.add(path);
-  renderRaTree();
+function _onRaFolderChange(sel) {
+  _raPath = sel.value === '' ? null : sel.value;
+  _renderRaFolderPath();
 }
 
-function raSelectServer(id) {
-  _ra_selectedServerId = id;
-  const server = state.servers.find(s => s.id == id);
-  const ind = document.getElementById('ra-selected-indicator');
-  const nameEl = document.getElementById('ra-selected-name');
-  if (ind && server) { nameEl.textContent = server.name + ' (' + server.host + ')'; ind.style.display = 'flex'; }
-  if (server) {
-    const eff = getEffectiveCredential(server);
-    const credSel = document.getElementById('ra-credential');
-    if (eff && credSel) credSel.value = eff.id;
+function _updateRaServerOptions() {
+  const el = document.getElementById('ra-server');
+  if (!el) return;
+  const cur = el.value;
+  const servers = _raPath === null ? state.servers : state.servers.filter(s => s.server_group === _raPath);
+  el.innerHTML = `<option value="">— select server —</option>` +
+    servers.map(s => `<option value="${s.id}" ${s.id==cur?'selected':''}>${escape(s.name)}</option>`).join('');
+  if (cur && !servers.find(s => s.id == cur)) el.value = '';
+}
+
+function raServerChange() {
+  const id = document.getElementById('ra-server').value;
+  if (id) {
+    const server = state.servers.find(s => s.id == id);
+    if (server) {
+      const eff = getEffectiveCredential(server);
+      if (eff) { document.getElementById('ra-credential').value = eff.id; _updateRaCredLabel(); }
+    }
   }
-  renderRaTree();
+}
+
+function _renderRaCredMenu(query) {
+  const menu = document.getElementById('ra-cred-menu');
+  if (!menu) return;
+  const q = (query || '').toLowerCase();
+  const filtered = state.credentials.filter(c => !q || c.name.toLowerCase().includes(q));
+  const selectedId = document.getElementById('ra-credential').value;
+  menu.innerHTML = `
+    <div class="cmd-search-wrap">
+      <input id="ra-cred-search" class="cmd-search" placeholder="Search…" autocomplete="off"
+        oninput="_renderRaCredMenu(this.value)" onclick="event.stopPropagation()">
+    </div>
+    <div class="cmd-select-opts">
+      <div class="cmd-select-opt${!selectedId ? ' selected' : ''}" data-value="">
+        <span style="color:var(--muted)">— select credential —</span>
+      </div>
+      ${filtered.map(c => `<div class="cmd-select-opt${c.id == selectedId ? ' selected' : ''}" data-value="${c.id}">${escape(c.name)}</div>`).join('')}
+    </div>`;
+  if (q) { const si = menu.querySelector('#ra-cred-search'); if (si) { si.value = q; si.focus(); } }
+}
+
+function toggleRaCredSelect() {
+  const menu = document.getElementById('ra-cred-menu');
+  const isOpen = menu.classList.contains('open');
+  document.querySelectorAll('.cmd-select-menu.open').forEach(m => m.classList.remove('open'));
+  if (!isOpen) { _renderRaCredMenu(''); menu.classList.add('open'); setTimeout(() => menu.querySelector('#ra-cred-search')?.focus(), 50); }
+}
+
+document.getElementById('ra-cred-menu').addEventListener('click', e => {
+  const opt = e.target.closest('.cmd-select-opt');
+  if (!opt) return;
+  document.getElementById('ra-credential').value = opt.dataset.value || '';
+  document.getElementById('ra-cred-menu').classList.remove('open');
+  _updateRaCredLabel();
+});
+
+function _updateRaCredLabel() {
+  const val = document.getElementById('ra-credential').value;
+  const label = document.getElementById('ra-cred-label');
+  if (!label) return;
+  const cred = state.credentials.find(c => c.id == val);
+  if (cred) { label.textContent = cred.name; label.style.color = ''; }
+  else { label.textContent = '— select credential —'; label.style.color = 'var(--muted)'; }
 }
 
 function renderRemoteAccess() {
-  const credSel = document.getElementById('ra-credential');
-  if (!credSel) return;
-  const cv = credSel.value;
-  credSel.innerHTML = '<option value="">— select credential —</option>' +
-    state.credentials.map(c => `<option value="${c.id}" ${c.id == cv ? 'selected' : ''}>${escape(c.name)}</option>`).join('');
+  _renderRaFolderPath();
+  _updateRaCredLabel();
   const dsmSel = document.getElementById('ra-vnc-dsm');
   const ckSel = document.getElementById('ra-vnc-client-key');
   if (dsmSel) {
@@ -2720,12 +2860,11 @@ function renderRemoteAccess() {
     ckSel.innerHTML = '<option value="">— none —</option>' +
       state.vncFiles.filter(f => f.file_type === 'client_key').map(f => `<option value="${f.id}" ${f.id == cv2 ? 'selected' : ''}>${escape(f.name)}</option>`).join('');
   }
-  renderRaTree();
   const rdpDef = getRdpDefaultSettings();
   const rdpSecEl = document.getElementById('ra-rdp-security');
   const rdpConEl = document.getElementById('ra-rdp-console');
-  if (rdpSecEl && rdpDef.security && !rdpSecEl.dataset.userSet) rdpSecEl.value = rdpDef.security;
-  if (rdpConEl && rdpDef.console && !rdpConEl.dataset.userSet) rdpConEl.checked = rdpDef.console;
+  if (rdpSecEl && rdpDef.security) rdpSecEl.value = rdpDef.security;
+  if (rdpConEl && rdpDef.console) rdpConEl.checked = rdpDef.console;
 }
 
 function raProtocolChange() {
@@ -2735,7 +2874,7 @@ function raProtocolChange() {
 }
 
 async function connectRemoteAccess() {
-  const serverId = _ra_selectedServerId;
+  const serverId = document.getElementById('ra-server').value;
   const credId = document.getElementById('ra-credential').value;
   const protocol = document.getElementById('ra-protocol').value;
   if (!serverId) { toast('Select a server', 'fail'); return; }
@@ -2743,7 +2882,8 @@ async function connectRemoteAccess() {
   const btn = document.getElementById('ra-connect-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
   const defaultPorts = { rdp: 3389, vnc: 5900, ssh: 22 };
-  const port = defaultPorts[protocol] || 22;
+  const rdpDef = getRdpDefaultSettings();
+  const port = rdpDef.port && protocol === 'rdp' ? rdpDef.port : (defaultPorts[protocol] || 22);
   try {
     if (protocol === 'vnc') {
       const dsmId = document.getElementById('ra-vnc-dsm')?.value;
@@ -2753,13 +2893,28 @@ async function connectRemoteAccess() {
       const w = window.open('/vnc/' + data.token, '_blank');
       if (!w) toast('Popup blocked — please allow popups for this site', 'fail');
     } else if (protocol === 'rdp') {
-      const rdpSecurity = document.getElementById('ra-rdp-security')?.value || 'nla';
+      const rdpSecurity = document.getElementById('ra-rdp-security')?.value || rdpDef.security || 'nla';
       const rdpConsole = document.getElementById('ra-rdp-console')?.checked || false;
-      const data = await api('POST', '/api/rdp-session', { server_id: +serverId, credential_id: +credId, port, rdp_security: rdpSecurity, rdp_console: rdpConsole });
-      const w = window.open('/rdp/' + data.token, '_blank');
-      if (!w) toast('Popup blocked — please allow popups for this site', 'fail');
+      const [w, h] = _getRdpResolution(rdpDef);
+      const data = await api('POST', '/api/rdp-session', {
+        server_id: +serverId, credential_id: +credId, port,
+        rdp_security: rdpSecurity, rdp_console: rdpConsole,
+        width: w, height: h,
+        color_depth: rdpDef.color_depth || 32,
+        disable_audio: rdpDef.disable_audio !== false,
+        enable_wallpaper: rdpDef.enable_wallpaper !== false,
+        enable_font_smoothing: rdpDef.enable_font_smoothing || false,
+        enable_desktop_composition: rdpDef.enable_desktop_composition !== false,
+        resize_method: rdpDef.resize_method || 'display-update',
+        cursor: rdpDef.cursor || 'local',
+        dpi: rdpDef.dpi || 96,
+      });
+      const win = window.open('/rdp/' + data.token, '_blank');
+      if (!win) toast('Popup blocked — please allow popups for this site', 'fail');
     } else if (protocol === 'ssh') {
-      const data = await api('POST', '/api/ssh-session', { server_id: +serverId, credential_id: +credId, port });
+      const sshDef = getSshDefaultSettings();
+      const sshPort = sshDef.port || 22;
+      const data = await api('POST', '/api/ssh-session', { server_id: +serverId, credential_id: +credId, port: sshPort });
       const w = window.open('/ssh/' + data.token, '_blank');
       if (!w) toast('Popup blocked — please allow popups for this site', 'fail');
     }
@@ -2829,20 +2984,60 @@ async function deleteVncFile(id) {
 
 // ── Protocol Settings ─────────────────────────────────────────────────────────
 
+function _rdpResolutionChange() {
+  const val = document.getElementById('rdp-default-resolution')?.value;
+  const row = document.getElementById('rdp-custom-res-row');
+  if (row) row.style.display = val === 'custom' ? '' : 'none';
+}
+
+function _getRdpResolution(rdpDef) {
+  if (rdpDef.resolution === 'custom') return [rdpDef.custom_width || 1280, rdpDef.custom_height || 800];
+  if (rdpDef.resolution) {
+    const parts = rdpDef.resolution.split('x');
+    if (parts.length === 2) return [parseInt(parts[0]), parseInt(parts[1])];
+  }
+  return [1280, 800];
+}
+
 function loadProtocolSettings() {
   try {
     const rdp = JSON.parse(localStorage.getItem('rcommander_rdp_settings') || '{}');
-    if (rdp.security) document.getElementById('rdp-default-security').value = rdp.security;
-    if (rdp.console) document.getElementById('rdp-default-console').checked = true;
+    if (rdp.security) { const el = document.getElementById('rdp-default-security'); if (el) el.value = rdp.security; }
+    if (rdp.port) { const el = document.getElementById('rdp-default-port'); if (el) el.value = rdp.port; }
+    if (rdp.console) { const el = document.getElementById('rdp-default-console'); if (el) el.checked = true; }
+    if (rdp.resolution) { const el = document.getElementById('rdp-default-resolution'); if (el) el.value = rdp.resolution; _rdpResolutionChange(); }
+    if (rdp.custom_width) { const el = document.getElementById('rdp-custom-width'); if (el) el.value = rdp.custom_width; }
+    if (rdp.custom_height) { const el = document.getElementById('rdp-custom-height'); if (el) el.value = rdp.custom_height; }
+    if (rdp.color_depth) { const el = document.getElementById('rdp-default-color-depth'); if (el) el.value = rdp.color_depth; }
+    if (rdp.dpi) { const el = document.getElementById('rdp-default-dpi'); if (el) el.value = rdp.dpi; }
+    if (rdp.resize_method) { const el = document.getElementById('rdp-default-resize-method'); if (el) el.value = rdp.resize_method; }
+    if (rdp.cursor) { const el = document.getElementById('rdp-default-cursor'); if (el) el.value = rdp.cursor; }
+    { const el = document.getElementById('rdp-default-wallpaper'); if (el) el.checked = rdp.enable_wallpaper !== false; }
+    { const el = document.getElementById('rdp-default-composition'); if (el) el.checked = rdp.enable_desktop_composition !== false; }
+    { const el = document.getElementById('rdp-default-font-smoothing'); if (el) el.checked = !!rdp.enable_font_smoothing; }
+    { const el = document.getElementById('rdp-default-disable-audio'); if (el) el.checked = rdp.disable_audio !== false; }
     const ssh = JSON.parse(localStorage.getItem('rcommander_ssh_settings') || '{}');
-    if (ssh.port) document.getElementById('ssh-default-port').value = ssh.port;
+    if (ssh.port) { const el = document.getElementById('ssh-default-port'); if (el) el.value = ssh.port; }
   } catch (_) {}
 }
 
 function saveRdpSettings() {
+  const res = document.getElementById('rdp-default-resolution')?.value || '1280x800';
   const settings = {
-    security: document.getElementById('rdp-default-security').value,
-    console: document.getElementById('rdp-default-console').checked,
+    security: document.getElementById('rdp-default-security')?.value || 'nla',
+    port: parseInt(document.getElementById('rdp-default-port')?.value) || 3389,
+    console: document.getElementById('rdp-default-console')?.checked || false,
+    resolution: res,
+    custom_width: parseInt(document.getElementById('rdp-custom-width')?.value) || 1280,
+    custom_height: parseInt(document.getElementById('rdp-custom-height')?.value) || 800,
+    color_depth: parseInt(document.getElementById('rdp-default-color-depth')?.value) || 32,
+    dpi: parseInt(document.getElementById('rdp-default-dpi')?.value) || 96,
+    resize_method: document.getElementById('rdp-default-resize-method')?.value || 'display-update',
+    cursor: document.getElementById('rdp-default-cursor')?.value || 'local',
+    enable_wallpaper: document.getElementById('rdp-default-wallpaper')?.checked !== false,
+    enable_desktop_composition: document.getElementById('rdp-default-composition')?.checked !== false,
+    enable_font_smoothing: document.getElementById('rdp-default-font-smoothing')?.checked || false,
+    disable_audio: document.getElementById('rdp-default-disable-audio')?.checked !== false,
   };
   localStorage.setItem('rcommander_rdp_settings', JSON.stringify(settings));
   toast('RDP settings saved');

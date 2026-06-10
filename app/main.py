@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.3"
+APP_VERSION = "1.6.4"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -262,28 +262,28 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "port": str(session["port"]),
         "username": session["username"],
         "password": session["password"],
-        "width": "1280",
-        "height": "800",
-        "dpi": "96",
-        "color-depth": "32",
+        "width": str(session.get("width", 1280)),
+        "height": str(session.get("height", 800)),
+        "dpi": str(session.get("dpi", 96)),
+        "color-depth": str(session.get("color_depth", 32)),
         "security": session.get("rdp_security", "nla"),
         "ignore-cert": "true",
         "client-name": "rcommander",
         "console": "true" if session.get("rdp_console") else "false",
         "timezone": "UTC",
-        "disable-audio": "true",
+        "disable-audio": "true" if session.get("disable_audio", True) else "false",
         "disable-auth": "false",
-        "enable-font-smoothing": "false",
-        "enable-wallpaper": "true",
+        "enable-font-smoothing": "true" if session.get("enable_font_smoothing", False) else "false",
+        "enable-wallpaper": "true" if session.get("enable_wallpaper", True) else "false",
         "enable-theming": "true",
         "enable-full-window-drag": "false",
-        "enable-desktop-composition": "true",
+        "enable-desktop-composition": "true" if session.get("enable_desktop_composition", True) else "false",
         "enable-menu-animations": "false",
         "disable-bitmap-caching": "false",
         "disable-offscreen-caching": "false",
         "disable-glyph-caching": "false",
-        "resize-method": "display-update",
-        "cursor": "local",
+        "resize-method": session.get("resize_method", "display-update"),
+        "cursor": session.get("cursor", "local"),
     }
     # Send "" for VERSION_* slots — guacd uses legacy-compatible mode which works reliably
     connect_args = [rdp_defaults.get(p, "") for p in param_names]
@@ -942,6 +942,14 @@ class RdpSessionIn(BaseModel):
     rdp_console: bool = False
     width: int = 1280
     height: int = 800
+    color_depth: int = 32
+    disable_audio: bool = True
+    enable_wallpaper: bool = True
+    enable_font_smoothing: bool = False
+    enable_desktop_composition: bool = True
+    resize_method: str = "display-update"
+    cursor: str = "local"
+    dpi: int = 96
 
 
 @app.post("/api/vnc-session")
@@ -1037,6 +1045,14 @@ def create_rdp_session(data: RdpSessionIn):
             "rdp_console": data.rdp_console,
             "width": data.width,
             "height": data.height,
+            "color_depth": data.color_depth,
+            "disable_audio": data.disable_audio,
+            "enable_wallpaper": data.enable_wallpaper,
+            "enable_font_smoothing": data.enable_font_smoothing,
+            "enable_desktop_composition": data.enable_desktop_composition,
+            "resize_method": data.resize_method,
+            "cursor": data.cursor,
+            "dpi": data.dpi,
             "name": server.name,
             "ts": time.time(),
         }
