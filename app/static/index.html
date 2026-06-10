@@ -384,6 +384,31 @@
   .toast.fail { border-left: 3px solid var(--danger-h); }
   @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } }
 
+  /* ── Settings sub-nav ── */
+  .settings-subnav {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    overflow-x: auto;
+    flex-shrink: 0;
+  }
+  .settings-pill {
+    padding: 10px 16px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: color .15s;
+    margin-bottom: -1px;
+  }
+  .settings-pill:hover { color: var(--text); }
+  .settings-pill.active { color: var(--accent-h); border-bottom-color: var(--accent-h); }
+
   /* ── Mobile ── */
   .mobile-nav {
     display: none;
@@ -544,19 +569,7 @@
     <span style="flex:1;display:flex;align-items:baseline;gap:6px">RCommander<span id="app-version" style="font-size:10px;font-weight:400;color:var(--muted)"></span></span>
   </div>
   <nav>
-    <div class="nav-item active" data-tab="servers">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor"/><circle cx="6" cy="18" r="1" fill="currentColor"/></svg>
-      <span class="nav-label">Servers</span>
-    </div>
-    <div class="nav-item" data-tab="credentials">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
-      <span class="nav-label">Credentials</span>
-    </div>
-    <div class="nav-item" data-tab="commands">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-      <span class="nav-label">Commands</span>
-    </div>
-    <div class="nav-item" data-tab="execute">
+    <div class="nav-item active" data-tab="execute">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       <span class="nav-label">Execute (Single)</span>
     </div>
@@ -568,9 +581,9 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       <span class="nav-label">Remote Access</span>
     </div>
-    <div class="nav-item" data-tab="vnc-files">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-      <span class="nav-label">VNC Files</span>
+    <div class="nav-item" data-tab="settings">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span class="nav-label">Settings</span>
     </div>
   </nav>
 </div>
@@ -578,19 +591,7 @@
 <!-- Mobile nav -->
 <div class="mobile-nav">
   <div class="mobile-nav-inner">
-    <div class="mobile-nav-item active" data-tab="servers">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
-      Servers
-    </div>
-    <div class="mobile-nav-item" data-tab="credentials">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
-      Credentials
-    </div>
-    <div class="mobile-nav-item" data-tab="commands">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-      Commands
-    </div>
-    <div class="mobile-nav-item" data-tab="execute">
+    <div class="mobile-nav-item active" data-tab="execute">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       Single
     </div>
@@ -602,9 +603,9 @@
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       Remote
     </div>
-    <div class="mobile-nav-item" data-tab="vnc-files">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-      VNC Files
+    <div class="mobile-nav-item" data-tab="settings">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
     </div>
   </div>
 </div>
@@ -612,7 +613,8 @@
 <!-- Main -->
 <main>
   <!-- SERVERS -->
-  <div id="tab-servers">
+  <div id="tab-servers" style="display:none">
+    <div class="settings-subnav" id="settings-subnav-servers"></div>
     <div class="topbar">
       <span class="page-title">Servers</span>
       <div style="display:flex;gap:8px;align-items:center">
@@ -670,6 +672,7 @@
 
   <!-- CREDENTIALS -->
   <div id="tab-credentials" style="display:none">
+    <div class="settings-subnav" id="settings-subnav-credentials"></div>
     <div class="topbar">
       <span class="page-title">Credentials</span>
       <button class="btn btn-primary" onclick="openModal('credential')">
@@ -696,6 +699,7 @@
 
   <!-- COMMANDS -->
   <div id="tab-commands" style="display:none">
+    <div class="settings-subnav" id="settings-subnav-commands"></div>
     <div class="topbar">
       <span class="page-title">Commands</span>
       <button class="btn btn-primary" onclick="openModal('command')">
@@ -721,7 +725,7 @@
   </div>
 
   <!-- EXECUTE -->
-  <div id="tab-execute" style="display:none">
+  <div id="tab-execute">
     <div class="topbar">
       <span class="page-title">Execute (Single)</span>
     </div>
@@ -886,6 +890,7 @@
 
   <!-- VNC FILES -->
   <div id="tab-vnc-files" style="display:none">
+    <div class="settings-subnav" id="settings-subnav-vnc-files"></div>
     <div class="topbar">
       <span class="page-title">VNC Files</span>
     </div>
@@ -935,7 +940,54 @@
         </table>
       </div>
       <div style="margin-top:12px;font-size:12px;color:var(--muted);line-height:1.6">
-        Upload UltraVNC authentication files here. Associate <strong style="color:var(--text)">DSM Plugin</strong> and <strong style="color:var(--text)">Client Key</strong> files with servers in the Servers tab.
+        Upload UltraVNC authentication files here. Associate <strong style="color:var(--text)">DSM Plugin</strong> and <strong style="color:var(--text)">Client Key</strong> files with servers on the Remote Access page.
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS: RDP -->
+  <div id="tab-settings-rdp" style="display:none">
+    <div class="settings-subnav" id="settings-subnav-settings-rdp"></div>
+    <div class="topbar"><span class="page-title">RDP Settings</span></div>
+    <div class="content" style="max-width:520px">
+      <div class="card" style="padding:20px">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Default RDP Options</div>
+        <div class="form-group">
+          <label>Default Security Mode</label>
+          <select id="rdp-default-security">
+            <option value="nla">NLA (Windows 10/11/Server 2016+)</option>
+            <option value="any">Any (auto-negotiate)</option>
+            <option value="rdp">RDP (legacy, Windows 7/2008)</option>
+            <option value="tls">TLS</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="rdp-default-console" style="width:auto;margin:0">
+          <label for="rdp-default-console" style="margin:0;cursor:pointer">Console session by default</label>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--muted);line-height:1.6">
+          These defaults are applied when opening a new RDP session from Remote Access. You can override them per-session on the Remote Access page.
+        </div>
+        <button class="btn btn-primary" style="margin-top:16px" onclick="saveRdpSettings()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS: SSH -->
+  <div id="tab-settings-ssh" style="display:none">
+    <div class="settings-subnav" id="settings-subnav-settings-ssh"></div>
+    <div class="topbar"><span class="page-title">SSH Settings</span></div>
+    <div class="content" style="max-width:520px">
+      <div class="card" style="padding:20px">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Default SSH Options</div>
+        <div class="form-group">
+          <label>Default Port</label>
+          <input id="ssh-default-port" type="number" value="22" min="1" max="65535" style="max-width:120px">
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--muted);line-height:1.6">
+          These defaults are applied when opening a new SSH session from Remote Access.
+        </div>
+        <button class="btn btn-primary" style="margin-top:16px" onclick="saveSshSettings()">Save</button>
       </div>
     </div>
   </div>
@@ -1488,12 +1540,38 @@ document.getElementById('exec-cmd-menu').addEventListener('click', e => {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
-function switchTab(tab) {
-  document.querySelectorAll('[id^="tab-"]').forEach(el => el.style.display = 'none');
-  document.getElementById(`tab-${tab}`).style.display = '';
-  document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.tab === tab);
+const SETTINGS_TABS = new Set(['servers', 'credentials', 'commands', 'vnc-files', 'settings-rdp', 'settings-ssh']);
+let _lastSettingsTab = 'servers';
+
+const SETTINGS_SUBNAV_HTML = `
+  <button class="settings-pill" data-subtab="servers" onclick="switchTab('servers')">Servers</button>
+  <button class="settings-pill" data-subtab="credentials" onclick="switchTab('credentials')">Credentials</button>
+  <button class="settings-pill" data-subtab="commands" onclick="switchTab('commands')">Commands</button>
+  <button class="settings-pill" data-subtab="vnc-files" onclick="switchTab('vnc-files')">VNC Files</button>
+  <button class="settings-pill" data-subtab="settings-rdp" onclick="switchTab('settings-rdp')">RDP</button>
+  <button class="settings-pill" data-subtab="settings-ssh" onclick="switchTab('settings-ssh')">SSH</button>
+`;
+
+function _renderSettingsSubnavs(activeSubtab) {
+  document.querySelectorAll('[id^="settings-subnav-"]').forEach(el => {
+    el.innerHTML = SETTINGS_SUBNAV_HTML;
   });
+  document.querySelectorAll('.settings-pill').forEach(pill => {
+    pill.classList.toggle('active', pill.dataset.subtab === activeSubtab);
+  });
+}
+
+function switchTab(tab) {
+  if (tab === 'settings') tab = _lastSettingsTab;
+  if (SETTINGS_TABS.has(tab)) _lastSettingsTab = tab;
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.style.display = 'none');
+  const el = document.getElementById(`tab-${tab}`);
+  if (el) el.style.display = '';
+  document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(el => {
+    const isSettings = el.dataset.tab === 'settings';
+    el.classList.toggle('active', isSettings ? SETTINGS_TABS.has(tab) : el.dataset.tab === tab);
+  });
+  if (SETTINGS_TABS.has(tab)) _renderSettingsSubnavs(tab);
 }
 
 document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(el => {
@@ -2396,6 +2474,8 @@ function _renderBulkCmdSelect(selectedId) {
         </div>`;
       }).join('')}
     </div>`;
+  const searchEl = menu.querySelector('#bulk-cmd-search');
+  if (searchEl && query) { searchEl.value = query; searchEl.focus(); }
 }
 
 function toggleBulkCmdSelect() {
@@ -2641,6 +2721,11 @@ function renderRemoteAccess() {
       state.vncFiles.filter(f => f.file_type === 'client_key').map(f => `<option value="${f.id}" ${f.id == cv2 ? 'selected' : ''}>${escape(f.name)}</option>`).join('');
   }
   renderRaTree();
+  const rdpDef = getRdpDefaultSettings();
+  const rdpSecEl = document.getElementById('ra-rdp-security');
+  const rdpConEl = document.getElementById('ra-rdp-console');
+  if (rdpSecEl && rdpDef.security && !rdpSecEl.dataset.userSet) rdpSecEl.value = rdpDef.security;
+  if (rdpConEl && rdpDef.console && !rdpConEl.dataset.userSet) rdpConEl.checked = rdpDef.console;
 }
 
 function raProtocolChange() {
@@ -2742,9 +2827,49 @@ async function deleteVncFile(id) {
   } catch(e) { toast(e.message, 'fail'); }
 }
 
+// ── Protocol Settings ─────────────────────────────────────────────────────────
+
+function loadProtocolSettings() {
+  try {
+    const rdp = JSON.parse(localStorage.getItem('rcommander_rdp_settings') || '{}');
+    if (rdp.security) document.getElementById('rdp-default-security').value = rdp.security;
+    if (rdp.console) document.getElementById('rdp-default-console').checked = true;
+    const ssh = JSON.parse(localStorage.getItem('rcommander_ssh_settings') || '{}');
+    if (ssh.port) document.getElementById('ssh-default-port').value = ssh.port;
+  } catch (_) {}
+}
+
+function saveRdpSettings() {
+  const settings = {
+    security: document.getElementById('rdp-default-security').value,
+    console: document.getElementById('rdp-default-console').checked,
+  };
+  localStorage.setItem('rcommander_rdp_settings', JSON.stringify(settings));
+  toast('RDP settings saved');
+}
+
+function saveSshSettings() {
+  const settings = {
+    port: parseInt(document.getElementById('ssh-default-port').value) || 22,
+  };
+  localStorage.setItem('rcommander_ssh_settings', JSON.stringify(settings));
+  toast('SSH settings saved');
+}
+
+function getRdpDefaultSettings() {
+  try { return JSON.parse(localStorage.getItem('rcommander_rdp_settings') || '{}'); }
+  catch (_) { return {}; }
+}
+
+function getSshDefaultSettings() {
+  try { return JSON.parse(localStorage.getItem('rcommander_ssh_settings') || '{}'); }
+  catch (_) { return {}; }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 loadAll().catch(e => toast('Failed to load data: ' + e.message, 'fail'));
+loadProtocolSettings();
 </script>
 </body>
 </html>
