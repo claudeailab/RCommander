@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.5.2"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -221,8 +221,8 @@ async def _guac_read_instr(reader: asyncio.StreamReader) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, session: dict) -> None:
-    """Negotiate an RDP connection with guacd."""
+async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, session: dict) -> str:
+    """Negotiate an RDP connection with guacd. Returns the ready instruction to forward to the browser."""
     writer.write(_guac_encode("select", "rdp").encode())
     await writer.drain()
 
@@ -248,6 +248,7 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "security": session.get("rdp_security", "nla"),
         "ignore-cert": "true",
         "client-name": "rcommander",
+        "console": "true" if session.get("rdp_console") else "false",
         "enable-font-smoothing": "true",
         "enable-wallpaper": "true",
         "enable-theming": "true",
@@ -259,6 +260,14 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
     connect_args = [rdp_defaults.get(p, "") for p in param_names]
     writer.write(_guac_encode("connect", *connect_args).encode())
     await writer.drain()
+
+    # Read guacd's response — either "ready" (success) or "error" (failure)
+    response = await asyncio.wait_for(_guac_read_instr(reader), timeout=15)
+    parts = _guac_parse_instr(response)
+    if parts and parts[0] == "error":
+        msg = parts[1] if len(parts) > 1 else "unknown error"
+        raise RuntimeError(f"guacd: {msg}")
+    return response  # "ready" instruction; caller must forward to browser
 
 
 _RDP_PAGE_TMPL = """\
@@ -835,6 +844,7 @@ class RdpSessionIn(BaseModel):
     credential_id: int
     port: int = 3389
     rdp_security: str = "nla"
+    rdp_console: bool = False
 
 
 @app.post("/api/vnc-session")
@@ -927,6 +937,7 @@ def create_rdp_session(data: RdpSessionIn):
             "username": cred.username if cred else "",
             "password": cred.password if cred else "",
             "rdp_security": data.rdp_security,
+            "rdp_console": data.rdp_console,
             "name": server.name,
             "ts": time.time(),
         }
@@ -960,8 +971,14 @@ async def rdp_ws_proxy(websocket: WebSocket, token: str):
         return
 
     try:
-        await _guac_handshake(reader, writer, session)
-    except Exception:
+        ready_instr = await _guac_handshake(reader, writer, session)
+        await websocket.send_text(ready_instr)
+    except Exception as e:
+        err_instr = _guac_encode("error", str(e), "516")
+        try:
+            await websocket.send_text(err_instr)
+        except Exception:
+            pass
         writer.close()
         try:
             await websocket.close()
