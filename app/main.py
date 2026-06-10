@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.7"
+APP_VERSION = "1.5.8"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -253,17 +253,21 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "client-name": "rcommander",
         "console": "true" if session.get("rdp_console") else "false",
         "timezone": "UTC",
+        "disable-audio": "true",
         "enable-font-smoothing": "false",
         "enable-wallpaper": "true",
         "enable-theming": "true",
         "enable-full-window-drag": "false",
         "enable-desktop-composition": "true",
         "enable-menu-animations": "false",
+        "disable-bitmap-caching": "false",
+        "disable-offscreen-caching": "false",
         "disable-glyph-caching": "false",
         "resize-method": "display-update",
         "cursor": "local",
     }
-    connect_args = [rdp_defaults.get(p, "") for p in param_names]
+    # Echo VERSION_* tokens back to guacd to accept the negotiated protocol version
+    connect_args = [p if p.startswith("VERSION_") else rdp_defaults.get(p, "") for p in param_names]
     print(f"[RDP {host_label}] connecting with security={rdp_defaults['security']} console={rdp_defaults['console']} user={rdp_defaults['username']!r}")
     writer.write(_guac_encode("connect", *connect_args).encode())
     await writer.drain()
@@ -337,6 +341,10 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
       if (state === Guacamole.Tunnel.State.OPEN) {
         status.textContent = 'Connected';
         status.style.color = '#3fb950';
+        // Resize to actual window dimensions — forces full desktop repaint from server
+        var w = displayDiv.clientWidth || 1280;
+        var h = displayDiv.clientHeight || 800;
+        client.sendSize(w, h);
         scaleDisplay();
       } else if (state === Guacamole.Tunnel.State.CLOSED) {
         if (status.style.color !== 'rgb(248, 81, 73)') {
@@ -351,6 +359,7 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
 
     var display = client.getDisplay();
     display.showCursor(true);
+    displayEl.addEventListener('contextmenu', function(e) { e.preventDefault(); });
     var mouse = new Guacamole.Mouse(displayEl);
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = function(mouseState) {
       client.sendMouseState(mouseState);
