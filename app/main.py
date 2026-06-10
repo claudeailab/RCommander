@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -244,16 +244,17 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "width": "1280",
         "height": "800",
         "dpi": "96",
-        "color-depth": "16",
-        "security": "any",
+        "color-depth": "32",
+        "security": session.get("rdp_security", "nla"),
         "ignore-cert": "true",
         "client-name": "rcommander",
         "enable-font-smoothing": "true",
-        "enable-wallpaper": "false",
-        "enable-theming": "false",
+        "enable-wallpaper": "true",
+        "enable-theming": "true",
         "enable-full-window-drag": "false",
-        "enable-desktop-composition": "false",
+        "enable-desktop-composition": "true",
         "enable-menu-animations": "false",
+        "resize-method": "display-update",
     }
     connect_args = [rdp_defaults.get(p, "") for p in param_names]
     writer.write(_guac_encode("connect", *connect_args).encode())
@@ -833,6 +834,7 @@ class RdpSessionIn(BaseModel):
     server_id: int
     credential_id: int
     port: int = 3389
+    rdp_security: str = "nla"
 
 
 @app.post("/api/vnc-session")
@@ -924,6 +926,7 @@ def create_rdp_session(data: RdpSessionIn):
             "port": data.port,
             "username": cred.username if cred else "",
             "password": cred.password if cred else "",
+            "rdp_security": data.rdp_security,
             "name": server.name,
             "ts": time.time(),
         }

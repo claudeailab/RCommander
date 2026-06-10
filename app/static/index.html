@@ -851,6 +851,18 @@
         <label>Credentials</label>
         <select id="ra-credential"></select>
       </div>
+      <div id="ra-rdp-options" style="display:none">
+        <div class="form-group">
+          <label>RDP Security</label>
+          <select id="ra-rdp-security">
+            <option value="nla">NLA (Windows 10/11/Server 2016+)</option>
+            <option value="any">Any (auto-negotiate)</option>
+            <option value="rdp">RDP (legacy, Windows 7/2008)</option>
+            <option value="tls">TLS</option>
+          </select>
+          <div class="hint">Try "Any" if NLA fails with a black screen</div>
+        </div>
+      </div>
       <div style="margin-top:8px">
         <button class="btn btn-run" onclick="connectRemoteAccess()">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -2580,6 +2592,7 @@ function renderRemoteAccess() {
 function raProtocolChange() {
   const proto = document.getElementById('ra-protocol').value;
   document.getElementById('ra-port').value = proto === 'rdp' ? '3389' : '5900';
+  document.getElementById('ra-rdp-options').style.display = proto === 'rdp' ? '' : 'none';
 }
 
 async function connectRemoteAccess() {
@@ -2598,7 +2611,8 @@ async function connectRemoteAccess() {
     }
   } else {
     try {
-      const data = await api('POST', '/api/rdp-session', { server_id: +serverId, credential_id: +credId, port });
+      const rdpSecurity = document.getElementById('ra-rdp-security')?.value || 'nla';
+      const data = await api('POST', '/api/rdp-session', { server_id: +serverId, credential_id: +credId, port, rdp_security: rdpSecurity });
       window.open('/rdp/' + data.token, '_blank');
     } catch (e) {
       toast('RDP error: ' + e.message, 'fail');
