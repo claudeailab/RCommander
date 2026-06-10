@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.6"
+APP_VERSION = "1.5.7"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -247,14 +247,14 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "width": "1280",
         "height": "800",
         "dpi": "96",
-        "color-depth": "16",
+        "color-depth": "32",
         "security": session.get("rdp_security", "nla"),
         "ignore-cert": "true",
         "client-name": "rcommander",
         "console": "true" if session.get("rdp_console") else "false",
         "timezone": "UTC",
         "enable-font-smoothing": "false",
-        "enable-wallpaper": "false",
+        "enable-wallpaper": "true",
         "enable-theming": "true",
         "enable-full-window-drag": "false",
         "enable-desktop-composition": "true",
