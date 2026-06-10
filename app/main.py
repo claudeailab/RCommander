@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.4"
+APP_VERSION = "1.5.5"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -247,19 +247,19 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "width": "1280",
         "height": "800",
         "dpi": "96",
-        "color-depth": "32",
+        "color-depth": "16",
         "security": session.get("rdp_security", "nla"),
         "ignore-cert": "true",
         "client-name": "rcommander",
         "console": "true" if session.get("rdp_console") else "false",
         "timezone": "UTC",
-        "enable-font-smoothing": "true",
-        "enable-wallpaper": "true",
+        "enable-font-smoothing": "false",
+        "enable-wallpaper": "false",
         "enable-theming": "true",
         "enable-full-window-drag": "false",
-        "enable-desktop-composition": "true",
+        "enable-desktop-composition": "false",
         "enable-menu-animations": "false",
-        "disable-glyph-caching": "true",
+        "disable-glyph-caching": "false",
         "resize-method": "display-update",
         "cursor": "local",
     }
@@ -289,7 +289,7 @@ _RDP_PAGE_TMPL = """\
 body { background:#000; display:flex; flex-direction:column; height:100vh; font-family:system-ui,sans-serif; overflow:hidden; }
 #bar { background:#161b22; border-bottom:1px solid #30363d; padding:8px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0; color:#e6edf3; font-size:13px; }
 #status { margin-left:auto; font-size:12px; color:#8b949e; }
-#display { flex:1; overflow:hidden; position:relative; }
+#display { flex:1; overflow:hidden; position:relative; cursor:none; }
 #display > div { position:absolute; top:0; left:0; }
 </style>
 </head>
