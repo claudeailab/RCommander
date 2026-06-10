@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.9"
+APP_VERSION = "1.6.0"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -232,7 +232,9 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
     param_names = elements[1:]  # first element is opcode "args"
     print(f"[RDP {host_label}] guacd args ({len(param_names)}): {param_names}")
 
-    writer.write(_guac_encode("size", "1280", "800", "96").encode())
+    width = str(session.get("width", 1280))
+    height = str(session.get("height", 800))
+    writer.write(_guac_encode("size", width, height, "96").encode())
     writer.write(_guac_encode("audio").encode())
     writer.write(_guac_encode("video").encode())
     writer.write(_guac_encode("image", "image/png", "image/jpeg").encode())
@@ -244,8 +246,8 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "port": str(session["port"]),
         "username": session["username"],
         "password": session["password"],
-        "width": "1280",
-        "height": "800",
+        "width": width,
+        "height": height,
         "dpi": "96",
         "color-depth": "32",
         "security": session.get("rdp_security", "nla"),
@@ -342,10 +344,6 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
       if (state === Guacamole.Tunnel.State.OPEN) {
         status.textContent = 'Connected';
         status.style.color = '#3fb950';
-        // Resize to actual window dimensions — forces full desktop repaint from server
-        var w = displayDiv.clientWidth || 1280;
-        var h = displayDiv.clientHeight || 800;
-        client.sendSize(w, h);
         scaleDisplay();
       } else if (state === Guacamole.Tunnel.State.CLOSED) {
         if (status.style.color !== 'rgb(248, 81, 73)') {
@@ -863,6 +861,8 @@ class RdpSessionIn(BaseModel):
     port: int = 3389
     rdp_security: str = "nla"
     rdp_console: bool = False
+    width: int = 1280
+    height: int = 800
 
 
 @app.post("/api/vnc-session")
@@ -956,6 +956,8 @@ def create_rdp_session(data: RdpSessionIn):
             "password": cred.password if cred else "",
             "rdp_security": data.rdp_security,
             "rdp_console": data.rdp_console,
+            "width": data.width,
+            "height": data.height,
             "name": server.name,
             "ts": time.time(),
         }
