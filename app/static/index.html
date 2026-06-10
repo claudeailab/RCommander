@@ -392,7 +392,10 @@
     display: flex;
     overflow-x: auto;
     flex-shrink: 0;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
+  .settings-subnav::-webkit-scrollbar { display: none; }
   .settings-pill {
     padding: 10px 16px;
     background: none;
@@ -860,21 +863,6 @@
           <div class="cmd-select-menu" id="ra-cred-menu"></div>
         </div>
       </div>
-      <div id="ra-rdp-options">
-        <div class="form-group">
-          <label>RDP Security</label>
-          <select id="ra-rdp-security">
-            <option value="nla">NLA (Windows 10/11/Server 2016+)</option>
-            <option value="any">Any (auto-negotiate)</option>
-            <option value="rdp">RDP (legacy, Windows 7/2008)</option>
-            <option value="tls">TLS</option>
-          </select>
-        </div>
-        <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
-          <input type="checkbox" id="ra-rdp-console" style="width:auto;margin:0">
-          <label for="ra-rdp-console" style="margin:0;cursor:pointer">Console session</label>
-        </div>
-      </div>
       <div id="ra-vnc-options" style="display:none">
         <div class="form-group">
           <label>DSM Plugin (optional)</label>
@@ -890,6 +878,10 @@
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           Connect
         </button>
+      </div>
+      <div id="ra-sessions" style="display:none;margin-top:20px">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Active Sessions</div>
+        <div id="ra-sessions-list"></div>
       </div>
     </div>
   </div>
@@ -2860,16 +2852,10 @@ function renderRemoteAccess() {
     ckSel.innerHTML = '<option value="">— none —</option>' +
       state.vncFiles.filter(f => f.file_type === 'client_key').map(f => `<option value="${f.id}" ${f.id == cv2 ? 'selected' : ''}>${escape(f.name)}</option>`).join('');
   }
-  const rdpDef = getRdpDefaultSettings();
-  const rdpSecEl = document.getElementById('ra-rdp-security');
-  const rdpConEl = document.getElementById('ra-rdp-console');
-  if (rdpSecEl && rdpDef.security) rdpSecEl.value = rdpDef.security;
-  if (rdpConEl && rdpDef.console) rdpConEl.checked = rdpDef.console;
 }
 
 function raProtocolChange() {
   const proto = document.getElementById('ra-protocol').value;
-  document.getElementById('ra-rdp-options').style.display = proto === 'rdp' ? '' : 'none';
   document.getElementById('ra-vnc-options').style.display = proto === 'vnc' ? '' : 'none';
 }
 
@@ -2881,24 +2867,25 @@ async function connectRemoteAccess() {
   if (!credId) { toast('Select credentials', 'fail'); return; }
   const btn = document.getElementById('ra-connect-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
-  const defaultPorts = { rdp: 3389, vnc: 5900, ssh: 22 };
   const rdpDef = getRdpDefaultSettings();
-  const port = rdpDef.port && protocol === 'rdp' ? rdpDef.port : (defaultPorts[protocol] || 22);
+  const defaultPorts = { rdp: rdpDef.port || 3389, vnc: 5900, ssh: 22 };
+  const port = defaultPorts[protocol] || 22;
+  const server = state.servers.find(s => s.id == serverId);
+  const label = `${server?.name || 'Server'} (${protocol.toUpperCase()})`;
   try {
+    let win = null;
     if (protocol === 'vnc') {
       const dsmId = document.getElementById('ra-vnc-dsm')?.value;
       const ckId = document.getElementById('ra-vnc-client-key')?.value;
       const data = await api('POST', '/api/vnc-session', { server_id: +serverId, credential_id: +credId, port,
         vnc_dsm_file_id: dsmId ? +dsmId : null, vnc_client_key_file_id: ckId ? +ckId : null });
-      const w = window.open('/vnc/' + data.token, '_blank');
-      if (!w) toast('Popup blocked — please allow popups for this site', 'fail');
+      win = window.open('/vnc/' + data.token, '_blank');
     } else if (protocol === 'rdp') {
-      const rdpSecurity = document.getElementById('ra-rdp-security')?.value || rdpDef.security || 'nla';
-      const rdpConsole = document.getElementById('ra-rdp-console')?.checked || false;
       const [w, h] = _getRdpResolution(rdpDef);
       const data = await api('POST', '/api/rdp-session', {
         server_id: +serverId, credential_id: +credId, port,
-        rdp_security: rdpSecurity, rdp_console: rdpConsole,
+        rdp_security: rdpDef.security || 'nla',
+        rdp_console: rdpDef.console || false,
         width: w, height: h,
         color_depth: rdpDef.color_depth || 32,
         disable_audio: rdpDef.disable_audio !== false,
@@ -2909,20 +2896,49 @@ async function connectRemoteAccess() {
         cursor: rdpDef.cursor || 'local',
         dpi: rdpDef.dpi || 96,
       });
-      const win = window.open('/rdp/' + data.token, '_blank');
-      if (!win) toast('Popup blocked — please allow popups for this site', 'fail');
+      win = window.open('/rdp/' + data.token, '_blank');
     } else if (protocol === 'ssh') {
       const sshDef = getSshDefaultSettings();
-      const sshPort = sshDef.port || 22;
-      const data = await api('POST', '/api/ssh-session', { server_id: +serverId, credential_id: +credId, port: sshPort });
-      const w = window.open('/ssh/' + data.token, '_blank');
-      if (!w) toast('Popup blocked — please allow popups for this site', 'fail');
+      const data = await api('POST', '/api/ssh-session', { server_id: +serverId, credential_id: +credId, port: sshDef.port || 22 });
+      win = window.open('/ssh/' + data.token, '_blank');
     }
+    if (!win) { toast('Popup blocked — please allow popups for this site', 'fail'); }
+    else { _raAddSession(label, win); }
   } catch (e) {
     toast(protocol.toUpperCase() + ' error: ' + e.message, 'fail');
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Connect'; }
   }
+}
+
+let _raSessions = [];
+let _raSessionId = 0;
+
+function _raAddSession(label, win) {
+  _raSessions.push({ id: ++_raSessionId, label, win });
+  _raRenderSessions();
+}
+
+function _raRenderSessions() {
+  _raSessions = _raSessions.filter(s => s.win && !s.win.closed);
+  const wrapper = document.getElementById('ra-sessions');
+  const list = document.getElementById('ra-sessions-list');
+  if (!wrapper || !list) return;
+  if (!_raSessions.length) { wrapper.style.display = 'none'; return; }
+  wrapper.style.display = '';
+  list.innerHTML = _raSessions.map(s => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;margin-bottom:6px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent-h)" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      <span style="flex:1;font-size:13px">${escape(s.label)}</span>
+      <button onclick="_raDisconnect(${s.id})" style="background:none;border:1px solid var(--danger);color:var(--danger);border-radius:5px;padding:2px 10px;font-size:11px;cursor:pointer;font-weight:600">Disconnect</button>
+    </div>`).join('');
+}
+
+function _raDisconnect(id) {
+  const s = _raSessions.find(x => x.id === id);
+  if (s && s.win && !s.win.closed) s.win.close();
+  _raSessions = _raSessions.filter(x => x.id !== id);
+  _raRenderSessions();
 }
 
 // ── VNC Files ─────────────────────────────────────────────────────────────────
