@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.5.4"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -223,17 +223,20 @@ async def _guac_read_instr(reader: asyncio.StreamReader) -> str:
 
 async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, session: dict) -> str:
     """Negotiate an RDP connection with guacd. Returns the ready instruction to forward to the browser."""
+    host_label = f"{session['host']}:{session['port']}"
     writer.write(_guac_encode("select", "rdp").encode())
     await writer.drain()
 
     args_instr = await _guac_read_instr(reader)
     elements = _guac_parse_instr(args_instr)
     param_names = elements[1:]  # first element is opcode "args"
+    print(f"[RDP {host_label}] guacd args ({len(param_names)}): {param_names}")
 
     writer.write(_guac_encode("size", "1280", "800", "96").encode())
     writer.write(_guac_encode("audio").encode())
     writer.write(_guac_encode("video").encode())
     writer.write(_guac_encode("image", "image/png", "image/jpeg").encode())
+    writer.write(_guac_encode("timezone", "UTC").encode())
     await writer.drain()
 
     rdp_defaults: dict = {
@@ -249,21 +252,26 @@ async def _guac_handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         "ignore-cert": "true",
         "client-name": "rcommander",
         "console": "true" if session.get("rdp_console") else "false",
+        "timezone": "UTC",
         "enable-font-smoothing": "true",
         "enable-wallpaper": "true",
         "enable-theming": "true",
         "enable-full-window-drag": "false",
         "enable-desktop-composition": "true",
         "enable-menu-animations": "false",
+        "disable-glyph-caching": "true",
         "resize-method": "display-update",
+        "cursor": "local",
     }
     connect_args = [rdp_defaults.get(p, "") for p in param_names]
+    print(f"[RDP {host_label}] connecting with security={rdp_defaults['security']} console={rdp_defaults['console']} user={rdp_defaults['username']!r}")
     writer.write(_guac_encode("connect", *connect_args).encode())
     await writer.drain()
 
     # Read guacd's response — either "ready" (success) or "error" (failure)
     response = await asyncio.wait_for(_guac_read_instr(reader), timeout=15)
     parts = _guac_parse_instr(response)
+    print(f"[RDP {host_label}] guacd response: {response[:120]!r}")
     if parts and parts[0] == "error":
         msg = parts[1] if len(parts) > 1 else "unknown error"
         raise RuntimeError(f"guacd: {msg}")
