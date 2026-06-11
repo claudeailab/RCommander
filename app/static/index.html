@@ -3026,7 +3026,14 @@ function _getRdpResolution(rdpDef) {
 
 function loadProtocolSettings() {
   try {
-    const rdp = JSON.parse(localStorage.getItem('rcommander_rdp_settings') || '{}');
+    let rdp = JSON.parse(localStorage.getItem('rcommander_rdp_settings') || '{}');
+    // One-time migration: old code defaulted to 'nla' which fails on most Windows machines.
+    // If the user hasn't explicitly opted back to nla after v1.6.8, reset it to 'any'.
+    if (!rdp._sec_migrated) {
+      if (!rdp.security || rdp.security === 'nla') rdp.security = 'any';
+      rdp._sec_migrated = true;
+      localStorage.setItem('rcommander_rdp_settings', JSON.stringify(rdp));
+    }
     if (rdp.security) { const el = document.getElementById('rdp-default-security'); if (el) el.value = rdp.security; }
     if (rdp.port) { const el = document.getElementById('rdp-default-port'); if (el) el.value = rdp.port; }
     if (rdp.console) { const el = document.getElementById('rdp-default-console'); if (el) el.checked = true; }
