@@ -478,6 +478,7 @@
   @media (max-width: 768px) {
     .sidebar { display: none; }
     .mobile-nav { display: block; }
+    #mobile-version-badge { display: block !important; }
     main { margin-left: 0; padding-bottom: 60px; max-width: 100vw; overflow-x: hidden; }
     .execute-layout { grid-template-columns: 1fr; }
     .content { padding: 16px; }
@@ -600,9 +601,11 @@
   </nav>
 </div>
 
+<!-- Mobile version badge (top-right, mobile only) -->
+<div id="mobile-version-badge" style="display:none;position:fixed;top:8px;right:10px;z-index:100;font-size:9px;color:var(--muted);letter-spacing:.3px;pointer-events:none">RCommander <span id="app-version-mobile"></span></div>
+
 <!-- Mobile nav -->
 <div class="mobile-nav">
-  <div style="text-align:center;font-size:9px;color:var(--muted);padding:3px 0 0;letter-spacing:.3px">RCommander <span id="app-version-mobile"></span></div>
   <div class="mobile-nav-inner">
     <div class="mobile-nav-item active" data-tab="execute">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>

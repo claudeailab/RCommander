@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.13"
+APP_VERSION = "1.6.14"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1176,30 +1176,23 @@ async def rdp_ws_proxy(websocket: WebSocket, token: str):
             pass
 
     async def tcp_to_ws():
-        # guacamole-common-js WebSocketTunnel.onmessage is stateless across frames:
-        # it re-initialises its parser on every message, so a Guacamole instruction
-        # that spans two WebSocket frames is silently corrupted.  We must only send
-        # complete instructions (ending at ';') per frame.
-        leftover = b""
+        # Send exactly one complete Guacamole instruction per WebSocket frame.
+        # guacamole-common-js WebSocketTunnel.onmessage resets its parser state
+        # on every message, so partial instructions silently corrupt the stream.
+        # readuntil(b";") is safe for all RDP draw instructions because base64,
+        # numbers and simple strings (the only value types) never contain ";".
+        count = 0
         try:
             while True:
-                data = await reader.read(65536)
-                if not data:
-                    break
-                buf = leftover + data
-                end = _guac_last_instr_end(buf)
-                if end < 0:
-                    leftover = buf
-                    continue
-                await websocket.send_text(buf[:end + 1].decode("utf-8", errors="replace"))
-                leftover = buf[end + 1:]
+                instr = await reader.readuntil(b";")
+                count += 1
+                if count <= 5:
+                    print(f"[RDP {host_label}] instr #{count}: {instr[:100]!r}")
+                await websocket.send_text(instr.decode("utf-8", errors="replace"))
+        except asyncio.IncompleteReadError:
+            print(f"[RDP {host_label}] guacd closed after {count} instructions")
         except Exception as e:
-            print(f"[RDP {host_label}] tcp_to_ws error: {e}")
-        if leftover:
-            try:
-                await websocket.send_text(leftover.decode("utf-8", errors="replace"))
-            except Exception:
-                pass
+            print(f"[RDP {host_label}] tcp_to_ws error after {count} instructions: {e}")
 
     tasks = [asyncio.ensure_future(ws_to_tcp()), asyncio.ensure_future(tcp_to_ws())]
     await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
