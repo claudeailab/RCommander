@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.16"
+APP_VERSION = "1.6.17"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1084,7 +1084,10 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
                 if not data:
                     print(f"[VNC {host_label}] VNC server closed connection")
                     break
-                await websocket.send_bytes(data)
+                try:
+                    await websocket.send_bytes(data)
+                except Exception:
+                    break
         except Exception as e:
             print(f"[VNC {host_label}] tcp_to_ws ended: {e}")
 
@@ -1209,7 +1212,11 @@ async def rdp_ws_proxy(websocket: WebSocket, token: str):
                 count += 1
                 if count <= 5:
                     print(f"[RDP {host_label}] instr #{count}: {instr[:100]!r}")
-                await websocket.send_text(instr.decode("utf-8", errors="replace"))
+                try:
+                    await websocket.send_text(instr.decode("utf-8", errors="replace"))
+                except Exception:
+                    # WebSocket already closed — stop sending
+                    break
         except asyncio.IncompleteReadError:
             print(f"[RDP {host_label}] guacd closed after {count} instructions")
         except Exception as e:
