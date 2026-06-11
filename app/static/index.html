@@ -1416,7 +1416,7 @@ function renderCredentials() {
     return `
     <tr>
       <td class="m-name"><strong>${escape(c.name)}</strong></td>
-      <td class="m-sub" style="display:flex;align-items:center;gap:8px;min-width:0"><code class="cred-username">${escape(c.username)}</code>${badge}</td>
+      <td class="m-sub" style="display:flex;align-items:center;gap:8px;min-width:0">${c.username ? `<code class="cred-username">${escape(c.username)}</code>` : ''}${badge}</td>
       <td class="col-desc" style="color:var(--muted)">${escape(c.description)}</td>
       <td class="m-actions">
         <div class="actions">
@@ -1777,7 +1777,7 @@ function openModal(type, id = null, defaultGroup = '') {
         <input id="f-name" value="${escape(c?.name ?? '')}" placeholder="prod-key">
       </div>
       <div class="form-group">
-        <label>Username</label>
+        <label>Username <span style="font-weight:400;color:var(--muted);font-size:11px">(optional — not needed for VNC)</span></label>
         <input id="f-username" value="${escape(c?.username ?? '')}" placeholder="root">
       </div>
       <div class="form-group">
@@ -1899,7 +1899,7 @@ async function saveServer() {
 async function saveCredential() {
   const body = { name: val('f-name'), username: val('f-username'), password: val('f-password'),
     private_key: document.getElementById('f-key')?.value ?? '', description: val('f-desc') };
-  if (!body.name || !body.username) { toast('Name and Username are required', 'fail'); return; }
+  if (!body.name) { toast('Name is required', 'fail'); return; }
   await saveEntity('credentials', 'Credential', body);
 }
 

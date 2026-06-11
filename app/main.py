@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.18"
+APP_VERSION = "1.6.19"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -546,7 +546,7 @@ class ServerIn(BaseModel):
 
 class CredentialIn(BaseModel):
     name: str
-    username: str
+    username: str = ""
     password: str = ""
     private_key: str = ""
     description: str = ""
