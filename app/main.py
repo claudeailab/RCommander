@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.15"
+APP_VERSION = "1.6.16"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -153,7 +153,7 @@ body { background: #000; display: flex; flex-direction: column; height: 100vh; f
 </div>
 <div id="vnc"><div id="t"></div></div>
 <script type="module">
-import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js';
+import RFB from '/novnc-core/rfb.js';
 const proto = location.protocol === 'https:' ? 'wss' : 'ws';
 const url = proto + '://' + location.host + '/ws/vnc/%%TOKEN%%';
 const rfb = new RFB(document.getElementById('t'), url, { credentials: { password: %%PW%% } });
@@ -165,11 +165,19 @@ rfb.addEventListener('connect', () => {
 });
 rfb.addEventListener('disconnect', ev => {
   const s = document.getElementById('status');
-  s.textContent = ev.detail.clean ? 'Disconnected' : 'Connection lost';
+  const reason = ev.detail.reason || '';
+  s.textContent = ev.detail.clean ? 'Disconnected' : ('Connection lost' + (reason ? ': ' + reason : ''));
   s.style.color = '#f85149';
+  console.error('[VNC] disconnect', ev.detail);
 });
 rfb.addEventListener('credentialsrequired', () => {
   rfb.sendCredentials({ password: prompt('VNC Password:') || '' });
+});
+rfb.addEventListener('securityfailure', ev => {
+  const s = document.getElementById('status');
+  s.textContent = 'Auth failed: ' + (ev.detail.reason || ev.detail.status);
+  s.style.color = '#f85149';
+  console.error('[VNC] securityfailure', ev.detail);
 });
 window._vncDisconnect = function() { try { rfb.disconnect(); } catch(_) {} window.close(); };
 </script>
@@ -1058,6 +1066,9 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         try:
             while True:
                 msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    print(f"[VNC {host_label}] client disconnected (code {msg.get('code', '?')})")
+                    break
                 if "bytes" in msg:
                     writer.write(msg["bytes"])
                 elif "text" in msg:
