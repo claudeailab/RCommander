@@ -32,6 +32,7 @@ RUN wget -qO /tmp/novnc.tgz https://registry.npmjs.org/@novnc/novnc/-/novnc-1.4.
     && tar -xzf /tmp/novnc.tgz -C /tmp \
     && mkdir -p /app/static/novnc-core \
     && cp -r /tmp/package/core/* /app/static/novnc-core/ \
+    && cp -r /tmp/package/vendor /app/static/vendor \
     && rm -rf /tmp/novnc.tgz /tmp/package
 
 RUN mkdir -p /data
