@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     guacd \
     libguac-client-rdp0 \
     libguac-client-ssh0 \
-    wget \
+    novnc \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3.12 -m venv /venv
@@ -27,13 +27,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ .
 
-# Bundle noVNC locally so VNC sessions don't require CDN access
-RUN wget -qO /tmp/novnc.tgz https://registry.npmjs.org/@novnc/novnc/-/novnc-1.4.0.tgz \
-    && tar -xzf /tmp/novnc.tgz -C /tmp \
-    && mkdir -p /app/static/novnc-core \
-    && cp -r /tmp/package/core/* /app/static/novnc-core/ \
-    && cp -r /tmp/package/vendor /app/static/vendor \
-    && rm -rf /tmp/novnc.tgz /tmp/package
+# Copy noVNC web assets from the apt package into static/
+RUN cp -r /usr/share/novnc/core /app/static/novnc-core \
+    && ([ -d /usr/share/novnc/vendor ] && cp -r /usr/share/novnc/vendor /app/static/vendor || true)
 
 RUN mkdir -p /data
 
