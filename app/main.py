@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.19"
+APP_VERSION = "1.6.20"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -148,38 +148,45 @@ body { background: #000; display: flex; flex-direction: column; height: 100vh; f
     <line x1="12" y1="17" x2="12" y2="21"/>
   </svg>
   VNC — %%NAME%%
-  <span id="status" style="color:#8b949e">Connecting…</span>
+  <span id="status" style="color:#8b949e">Loading…</span>
   <button id="disc-btn" onclick="window._vncDisconnect && window._vncDisconnect()">Disconnect</button>
 </div>
 <div id="vnc"><div id="t"></div></div>
 <script type="module">
-import RFB from '/novnc-core/rfb.js';
-const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-const url = proto + '://' + location.host + '/ws/vnc/%%TOKEN%%';
-const rfb = new RFB(document.getElementById('t'), url, { credentials: { password: %%PW%% } });
-rfb.scaleViewport = true;
-rfb.resizeSession = true;
-rfb.addEventListener('connect', () => {
+const setStatus = (text, color) => {
   const s = document.getElementById('status');
-  s.textContent = 'Connected'; s.style.color = '#3fb950';
+  s.textContent = text; s.style.color = color || '#8b949e';
+};
+window.addEventListener('unhandledrejection', ev => {
+  setStatus('Error: ' + (ev.reason?.message || ev.reason), '#f85149');
 });
-rfb.addEventListener('disconnect', ev => {
-  const s = document.getElementById('status');
-  const reason = ev.detail.reason || '';
-  s.textContent = ev.detail.clean ? 'Disconnected' : ('Connection lost' + (reason ? ': ' + reason : ''));
-  s.style.color = '#f85149';
-  console.error('[VNC] disconnect', ev.detail);
-});
-rfb.addEventListener('credentialsrequired', () => {
-  rfb.sendCredentials({ password: prompt('VNC Password:') || '' });
-});
-rfb.addEventListener('securityfailure', ev => {
-  const s = document.getElementById('status');
-  s.textContent = 'Auth failed: ' + (ev.detail.reason || ev.detail.status);
-  s.style.color = '#f85149';
-  console.error('[VNC] securityfailure', ev.detail);
-});
-window._vncDisconnect = function() { try { rfb.disconnect(); } catch(_) {} window.close(); };
+try {
+  setStatus('Loading noVNC…');
+  const { default: RFB } = await import('/novnc-core/rfb.js');
+  setStatus('Connecting…');
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = proto + '://' + location.host + '/ws/vnc/%%TOKEN%%';
+  const rfb = new RFB(document.getElementById('t'), url, { credentials: { password: %%PW%% } });
+  rfb.scaleViewport = true;
+  rfb.resizeSession = true;
+  rfb.addEventListener('connect', () => setStatus('Connected', '#3fb950'));
+  rfb.addEventListener('disconnect', ev => {
+    const reason = ev.detail.reason || '';
+    setStatus(ev.detail.clean ? 'Disconnected' : ('Connection lost' + (reason ? ': ' + reason : '')), '#f85149');
+    console.error('[VNC] disconnect', ev.detail);
+  });
+  rfb.addEventListener('credentialsrequired', () => {
+    rfb.sendCredentials({ password: prompt('VNC Password:') || '' });
+  });
+  rfb.addEventListener('securityfailure', ev => {
+    setStatus('Auth failed: ' + (ev.detail.reason || ev.detail.status), '#f85149');
+    console.error('[VNC] securityfailure', ev.detail);
+  });
+  window._vncDisconnect = function() { try { rfb.disconnect(); } catch(_) {} window.close(); };
+} catch(e) {
+  setStatus('Failed to load: ' + e.message, '#f85149');
+  console.error('[VNC] init error', e);
+}
 </script>
 </body>
 </html>"""
