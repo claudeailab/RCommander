@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.14"
+APP_VERSION = "1.6.15"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1038,11 +1038,16 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         await websocket.close(code=1008)
         return
 
+    host_label = f"{session['host']}:{session['port']}"
+
+    # noVNC negotiates "binary" or "base64"; accept "binary"
     await websocket.accept(subprotocol="binary")
 
     try:
         reader, writer = await asyncio.open_connection(session["host"], session["port"])
-    except Exception:
+        print(f"[VNC {host_label}] TCP connected")
+    except Exception as e:
+        print(f"[VNC {host_label}] TCP connect failed: {e}")
         try:
             await websocket.close()
         except Exception:
@@ -1052,27 +1057,32 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     async def ws_to_tcp():
         try:
             while True:
-                data = await websocket.receive_bytes()
-                writer.write(data)
+                msg = await websocket.receive()
+                if "bytes" in msg:
+                    writer.write(msg["bytes"])
+                elif "text" in msg:
+                    writer.write(msg["text"].encode())
                 await writer.drain()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[VNC {host_label}] ws_to_tcp ended: {e}")
 
     async def tcp_to_ws():
         try:
             while True:
                 data = await reader.read(65536)
                 if not data:
+                    print(f"[VNC {host_label}] VNC server closed connection")
                     break
                 await websocket.send_bytes(data)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[VNC {host_label}] tcp_to_ws ended: {e}")
 
     tasks = [asyncio.ensure_future(ws_to_tcp()), asyncio.ensure_future(tcp_to_ws())]
     await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for t in tasks:
         t.cancel()
     writer.close()
+    print(f"[VNC {host_label}] proxy closed")
     try:
         await websocket.close()
     except Exception:
