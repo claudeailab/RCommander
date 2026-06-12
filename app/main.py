@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.59"
+APP_VERSION = "1.6.60"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1356,14 +1356,19 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             # sides use our randomly-generated AES key for the stream.
             print(f"[VNC {label}] DSM: decrypt failed — trying server-pubkey mode")
             from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-            server_n = int.from_bytes(encrypted_key, "big")
+            # UltraVNC/Windows CryptoAPI stores RSA key material in little-endian.
+            # The last byte of encrypted_key (0x91 for this server) has the high bit
+            # set, confirming it is the most-significant byte in LE storage.
+            # Reverse to get the standard big-endian integer for Python crypto.
+            server_n = int.from_bytes(encrypted_key[::-1], "big")
             server_pub = RSAPublicNumbers(e=65537, n=server_n).public_key()
             aes_key = os.urandom(16)
             encrypted_session = server_pub.encrypt(aes_key, asym_padding.PKCS1v15())
-            writer.write(encrypted_session)
+            # Windows CryptDecrypt expects the ciphertext in little-endian; reverse ours.
+            writer.write(encrypted_session[::-1])
             await writer.drain()
             print(f"[VNC {label}] DSM: sent {len(encrypted_session)}B encrypted session key "
-                  f"(no ACK prefix), our AES key={aes_key.hex()}")
+                  f"(LE-reversed, no ACK), our AES key={aes_key.hex()}")
             iv = bytes(16)
             enc_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).encryptor()
             dec_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
