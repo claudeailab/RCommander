@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.55"
+APP_VERSION = "1.6.56"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1249,8 +1249,15 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             sub_types = list(server_greeting[5:5 + sub_count]) if sub_count else []
             print(f"[VNC {label}] DSM: sub_types={[hex(t) for t in sub_types]}")
 
-            # Respond with 1-byte sub-type selection (first offered = 0x73 for DSM)
-            chosen = sub_types[0] if sub_types else 0x73
+            # 0x72 = server uses client's pre-configured public key to encrypt AES key
+            # 0x73 = server sends its own public key, client generates+encrypts AES key
+            # Prefer 0x72 when we have a client private key; otherwise fall back to 0x73.
+            if 0x72 in sub_types:
+                chosen = 0x72
+            elif sub_types:
+                chosen = sub_types[0]
+            else:
+                chosen = 0x73
             writer.write(bytes([chosen]))
             await writer.drain()
             print(f"[VNC {label}] DSM: sent sub-type 0x{chosen:02x}")
@@ -1267,12 +1274,13 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 print(f"[VNC {label}] DSM: server silent after sub-type — sending pubkey")
 
             if len(after_sub) >= key_size:
-                # First key_size bytes ARE the RSA ciphertext; bytes that follow
-                # are AES-encrypted RFB stream data (SecurityResult + early frames).
-                encrypted_key = after_sub[:key_size]
-                dsm_leftover_enc = after_sub[key_size:]
-                print(f"[VNC {label}] DSM: server sent encrypted key after sub-type, "
-                      f"leftover={len(dsm_leftover_enc)}B")
+                # Response structure: [22-byte fixed header][256-byte RSA ciphertext][leftover]
+                # The 22-byte header is identical across all connections (confirmed by observation).
+                hdr_size = 22
+                encrypted_key = after_sub[hdr_size:hdr_size + key_size]
+                dsm_leftover_enc = after_sub[hdr_size + key_size:]
+                print(f"[VNC {label}] DSM: hdr={after_sub[:hdr_size].hex()} "
+                      f"leftover_raw={dsm_leftover_enc.hex()}")
             else:
                 # Send RSA public key as raw big-endian modulus (no DER/ASN.1 wrapper)
                 pub_nums = private_key.public_key().public_numbers()
@@ -1301,7 +1309,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                                       algorithm=hashes.SHA1(), label=None)]:
             try:
                 aes_key = private_key.decrypt(encrypted_key, pad)
-                print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__}, {len(aes_key)}B)")
+                print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__}, "
+                      f"{len(aes_key)}B) plaintext={aes_key.hex()}")
                 break
             except Exception as e:
                 print(f"[VNC {label}] {type(pad).__name__} failed: {e}")
