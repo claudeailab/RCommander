@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.52"
+APP_VERSION = "1.6.53"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1223,12 +1223,18 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             raise ValueError("Cannot load RSA private key")
         key_size = (private_key.key_size + 7) // 8
 
-        # Read server's type-17 greeting (usually 7 bytes in practice):
-        # [nonce/caps(4)] [sub_count(1)] [sub_types(N)]
-        try:
-            server_greeting = await asyncio.wait_for(reader.read(512), timeout=2.0)
-        except asyncio.TimeoutError:
-            server_greeting = b""
+        # Drain the full server greeting (TCP may deliver it in multiple chunks).
+        # Format: [caps/nonce(4)][sub_count(1)][sub_types(sub_count)]
+        # Typical: ff ff ff ff 02 73 72  (7 bytes, but may arrive as 4 + 3)
+        server_greeting = b""
+        while len(server_greeting) < key_size:
+            try:
+                chunk = await asyncio.wait_for(reader.read(512), timeout=0.5)
+                if not chunk:
+                    break
+                server_greeting += chunk
+            except asyncio.TimeoutError:
+                break   # no more data — greeting is complete
         print(f"[VNC {label}] Type-17 greeting: {len(server_greeting)}B "
               f"hex={server_greeting.hex()}")
 
@@ -1237,32 +1243,31 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             encrypted_key = server_greeting[:key_size]
             print(f"[VNC {label}] DSM: server sent key directly (pre-installed pubkey)")
         else:
-            # Greeting was a sub-type negotiation message.
-            # Parse: [caps(4)] [count(1)] [sub_types(count)]
-            # Respond with 1-byte sub-type selection.
-            # 0x73 = first offered sub-type (DSM plugin); 0x00 = "use DSM default"
+            # Parse greeting: [caps(4)][count(1)][sub_types(count)]
             sub_count = server_greeting[4] if len(server_greeting) >= 5 else 0
             sub_types = list(server_greeting[5:5 + sub_count]) if sub_count else []
-            chosen = sub_types[0] if sub_types else 0x00
+            print(f"[VNC {label}] DSM: sub_types={[hex(t) for t in sub_types]}")
+
+            # Respond with 1-byte sub-type selection (first offered = 0x73 for DSM)
+            chosen = sub_types[0] if sub_types else 0x73
             writer.write(bytes([chosen]))
             await writer.drain()
-            print(f"[VNC {label}] DSM: sent sub-type 0x{chosen:02x}, "
-                  f"reading server response before sending pubkey")
+            print(f"[VNC {label}] DSM: sent sub-type 0x{chosen:02x}")
 
-            # Read any server reply after sub-type selection (challenge or prompt)
+            # Read any server reply after sub-type selection (may be empty)
             try:
-                after_sub = await asyncio.wait_for(reader.read(key_size * 2), timeout=2.0)
-                print(f"[VNC {label}] DSM: after sub-type, server sent "
+                after_sub = await asyncio.wait_for(reader.read(key_size * 2), timeout=1.0)
+                print(f"[VNC {label}] DSM: server after sub-type: "
                       f"{len(after_sub)}B hex={after_sub.hex()}")
             except asyncio.TimeoutError:
                 after_sub = b""
-                print(f"[VNC {label}] DSM: server silent after sub-type")
+                print(f"[VNC {label}] DSM: server silent after sub-type — sending pubkey")
 
             if len(after_sub) >= key_size:
                 encrypted_key = after_sub[:key_size]
-                print(f"[VNC {label}] DSM: using server's post-sub-type data as encrypted key")
+                print(f"[VNC {label}] DSM: server sent encrypted key after sub-type")
             else:
-                # Send our RSA public key as raw big-endian modulus (no DER/ASN.1 wrapper)
+                # Send RSA public key as raw big-endian modulus (no DER/ASN.1 wrapper)
                 pub_nums = private_key.public_key().public_numbers()
                 raw_modulus = pub_nums.n.to_bytes(key_size, "big")
                 writer.write(raw_modulus)
