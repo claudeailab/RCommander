@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.22"
+APP_VERSION = "1.6.23"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1070,15 +1070,22 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         return
 
     async def ws_to_tcp():
+        msgs = 0
         try:
             while True:
                 msg = await websocket.receive()
                 if msg.get("type") == "websocket.disconnect":
-                    print(f"[VNC {host_label}] client disconnected (code {msg.get('code', '?')})")
+                    print(f"[VNC {host_label}] client disconnected (code {msg.get('code', '?')}) after {msgs} ws msgs")
                     break
                 if "bytes" in msg:
-                    writer.write(msg["bytes"])
+                    msgs += 1
+                    data = msg["bytes"]
+                    if msgs <= 3:
+                        print(f"[VNC {host_label}] ws→tcp #{msgs}: {len(data)} bytes: {data[:20]!r}")
+                    writer.write(data)
                 elif "text" in msg:
+                    msgs += 1
+                    print(f"[VNC {host_label}] ws→tcp text #{msgs}: {msg['text'][:50]!r}")
                     writer.write(msg["text"].encode())
                 await writer.drain()
         except Exception as e:
@@ -1088,7 +1095,11 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         chunks = 0
         try:
             while True:
-                data = await reader.read(65536)
+                try:
+                    data = await asyncio.wait_for(reader.read(65536), timeout=10.0)
+                except asyncio.TimeoutError:
+                    print(f"[VNC {host_label}] VNC server timeout — no data after 10s (chunk {chunks+1})")
+                    break
                 if not data:
                     print(f"[VNC {host_label}] VNC server closed after {chunks} chunks")
                     break
