@@ -12,6 +12,10 @@ import winrm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+try:
+    from cryptography.hazmat.decrepit.ciphers.modes import OFB as _OFB
+except ImportError:
+    from cryptography.hazmat.primitives.ciphers.modes import OFB as _OFB  # type: ignore[assignment]
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -127,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.57"
+APP_VERSION = "1.6.58"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1308,9 +1312,14 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                     asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
                                       algorithm=hashes.SHA1(), label=None)]:
             try:
-                aes_key = private_key.decrypt(encrypted_key, pad)
+                candidate = private_key.decrypt(encrypted_key, pad)
                 print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__}, "
-                      f"{len(aes_key)}B) plaintext={aes_key.hex()}")
+                      f"{len(candidate)}B) plaintext={candidate.hex()}")
+                if len(candidate) == 16:
+                    aes_key = candidate
+                else:
+                    print(f"[VNC {label}] DSM: rejecting {len(candidate)}B plaintext "
+                          f"(expected 16B AES-128 key — likely false positive)")
                 break
             except Exception as e:
                 print(f"[VNC {label}] {type(pad).__name__} failed: {e}")
@@ -1321,8 +1330,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             writer.write(b"\x01")
             await writer.drain()
             iv = bytes(16)
-            enc_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
-            dec_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
+            enc_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).encryptor()
+            dec_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
             print(f"[VNC {label}] DSM AES-128-OFB active (client-key mode), key={aes_key.hex()}")
             dsm_pre_buf = b""
             if dsm_leftover_enc:
@@ -1355,8 +1364,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             print(f"[VNC {label}] DSM: sent ACK + {len(encrypted_session)}B encrypted session key, "
                   f"our AES key={aes_key.hex()}")
             iv = bytes(16)
-            enc_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
-            dec_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
+            enc_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).encryptor()
+            dec_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
             # leftover bytes were sent by server BEFORE it knew our AES key →
             # they cannot be encrypted with the session key; discard them.
             print(f"[VNC {label}] DSM: discarding {len(dsm_leftover_enc)}B pre-exchange data")
