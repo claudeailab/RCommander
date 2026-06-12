@@ -2818,7 +2818,6 @@ function _raServerRowHTML(s, depth) {
     <div style="display:flex;gap:4px;flex-wrap:wrap;margin-left:auto">
       <button class="btn btn-ghost btn-sm" onclick="raSendCommand(${s.id})"
         style="font-size:11px;padding:3px 9px"${!hasCmdCred ? ' title="No Command Credentials configured"' : ''}>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         CMD
       </button>
       <button class="btn btn-ghost btn-sm" onclick="raSshConnect(${s.id})"
