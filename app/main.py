@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.47"
+APP_VERSION = "1.6.48"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1149,13 +1149,10 @@ def _load_rsa_private_key(key_data: bytes):
 
 async def _dsm_handshake(reader, writer, key_path: str, label: str = ""):
     """
-    SecureVNCPlugin2 handshake (UltraVNC).
-    After TCP connect and before any RFB data:
-      1. Server sends RSA-encrypted AES-128 session key (key_size_bytes long)
-      2. We decrypt with our RSA private key (.pkey file)
-      3. We send 1-byte ack (0x01)
-      4. All subsequent data is AES-128-OFB encrypted with zero IV
-    Returns (encryptor, decryptor) or (None, None) on failure.
+    SecureVNCPlugin2 handshake (UltraVNC) — adaptive protocol detection.
+    Returns (initial_bytes, enc_ctx, dec_ctx).
+    initial_bytes: any server data read before encryption begins (must be forwarded to client).
+    enc_ctx/dec_ctx: AES-128-OFB contexts, or None if DSM was not established.
     """
     try:
         with open(key_path, "rb") as f:
@@ -1163,36 +1160,66 @@ async def _dsm_handshake(reader, writer, key_path: str, label: str = ""):
         private_key = _load_rsa_private_key(key_data)
         if private_key is None:
             print(f"[DSM {label}] Cannot load RSA private key from {key_path}")
-            return None, None
+            return b"", None, None
         key_size = (private_key.key_size + 7) // 8
-        print(f"[DSM {label}] RSA-{private_key.key_size}, expecting {key_size}-byte server packet")
-        encrypted = await asyncio.wait_for(reader.readexactly(key_size), timeout=10.0)
+        print(f"[DSM {label}] RSA-{private_key.key_size}, reading up to {key_size}B from server")
+
+        # Read initial data — use read() not readexactly() to avoid blocking
+        try:
+            initial = await asyncio.wait_for(reader.read(key_size), timeout=5.0)
+        except asyncio.TimeoutError:
+            # Server sent nothing; try client-initiated probe then give up
+            print(f"[DSM {label}] Server silent after 5s — falling through without DSM")
+            return b"", None, None
+
+        if not initial:
+            print(f"[DSM {label}] Server closed connection before handshake")
+            return b"", None, None
+
+        # Plain RFB banner ("RFB x.y\n") → no DSM on this connection
+        if initial[:4] == b"RFB ":
+            print(f"[DSM {label}] Server sent RFB banner ({len(initial)}B) — no DSM encryption")
+            return initial, None, None
+
+        # If we have fewer bytes than expected, try reading the rest
+        if 0 < len(initial) < key_size:
+            try:
+                rest = await asyncio.wait_for(
+                    reader.readexactly(key_size - len(initial)), timeout=3.0)
+                initial += rest
+            except (asyncio.TimeoutError, asyncio.IncompleteReadError) as e:
+                print(f"[DSM {label}] Partial read ({len(initial)}/{key_size}B): {e} — forwarding plain")
+                return initial, None, None
+
+        # Attempt RSA decryption of the session key
         aes_key = None
         for pad in [asym_padding.PKCS1v15(),
                     asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
                                       algorithm=hashes.SHA1(), label=None)]:
             try:
-                aes_key = private_key.decrypt(encrypted, pad)
+                aes_key = private_key.decrypt(initial[:key_size], pad)
                 print(f"[DSM {label}] Decrypted {len(aes_key)}B key with {type(pad).__name__}")
                 break
             except Exception as e:
                 print(f"[DSM {label}] {type(pad).__name__} failed: {e}")
+
         if not aes_key:
-            return None, None
-        aes_key = (aes_key + bytes(16))[:16]  # AES-128 = 16 bytes
+            # Decryption failed — forward what we read as plain data
+            print(f"[DSM {label}] RSA decrypt failed — forwarding {len(initial)}B as plain")
+            return initial, None, None
+
+        aes_key = (aes_key + bytes(16))[:16]  # truncate/pad to 16 bytes (AES-128)
         writer.write(b"\x01")
         await writer.drain()
-        print(f"[DSM {label}] Handshake OK — key {aes_key.hex()}")
+        print(f"[DSM {label}] Handshake OK — AES key {aes_key.hex()}")
         iv = bytes(16)
         enc = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
         dec = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
-        return enc, dec
-    except asyncio.TimeoutError:
-        print(f"[DSM {label}] Timeout — server did not send DSM handshake")
-        return None, None
+        return b"", enc, dec
+
     except Exception as e:
         print(f"[DSM {label}] Handshake error: {e}")
-        return None, None
+        return b"", None, None
 
 
 @app.websocket("/ws/vnc/{token}")
@@ -1221,18 +1248,13 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
             pass
         return
 
+    initial_bytes = b""
     enc_ctx = dec_ctx = None
     if client_key_path:
         print(f"[VNC {host_label}] DSM key configured, running handshake")
-        enc_ctx, dec_ctx = await _dsm_handshake(reader, writer, client_key_path, host_label)
+        initial_bytes, enc_ctx, dec_ctx = await _dsm_handshake(reader, writer, client_key_path, host_label)
         if enc_ctx is None:
-            print(f"[VNC {host_label}] DSM handshake failed — closing")
-            writer.close()
-            try:
-                await websocket.close()
-            except Exception:
-                pass
-            return
+            print(f"[VNC {host_label}] DSM not established — proxying as plain VNC")
 
     async def ws_to_tcp():
         msgs = 0
@@ -1255,6 +1277,11 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     async def tcp_to_ws():
         chunks = 0
         try:
+            # Forward any bytes read during handshake detection
+            if initial_bytes:
+                data = dec_ctx.update(initial_bytes) if dec_ctx else initial_bytes
+                await websocket.send_bytes(data)
+                chunks += 1
             while True:
                 data = await reader.read(65536)
                 if not data:
