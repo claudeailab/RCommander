@@ -1695,6 +1695,14 @@ function openModal(type, id = null, defaultGroup = '') {
     const s = id ? state.servers.find(x => x.id === id) : null;
     const src = s ?? _cloneSource;
     const groupValue = src?.server_group ?? defaultGroup;
+    const _effCmd = src ? getEffectiveCredential(src) : null;
+    const _effRa  = src ? getEffectiveRemoteAccessCredential(src) : null;
+    const _cmdPlaceholder = _effCmd?.inherited
+      ? `↑ Inherited: ${escape(state.credentials.find(c=>c.id===_effCmd.id)?.name||'')} (from ${escape(_effCmd.from)})`
+      : '— none —';
+    const _raPlaceholder  = _effRa?.inherited
+      ? `↑ Inherited: ${escape(state.credentials.find(c=>c.id===_effRa.id)?.name||'')} (from ${escape(_effRa.from)})`
+      : '— none —';
     const title = s ? 'Edit Server' : (_cloneSource ? `Clone "${_cloneSource.name}"` : 'Add Server');
     modalBox.innerHTML = `
       ${modalHeader(title)}
@@ -1728,14 +1736,10 @@ function openModal(type, id = null, defaultGroup = '') {
         <input type="hidden" id="f-group" value="${escape(groupValue)}">
         <div class="hint" id="f-group-hint">${groupValue ? 'Folder: ' + escape(groupValue) : 'No folder selected'}</div>
       </div>
-      ${(() => {
-        const cmdInherit = (() => { const parts=(groupValue||'').split('/').filter(Boolean); for(let i=parts.length;i>0;i--){const p=parts.slice(0,i).join('/');const fc=state.folderCredentials.find(f=>f.path===p);if(fc?.credential_id){const cr=state.credentials.find(c=>c.id===fc.credential_id);if(cr)return{name:cr.name,from:p};}} return null; })();
-        const raInherit  = (() => { const parts=(groupValue||'').split('/').filter(Boolean); for(let i=parts.length;i>0;i--){const p=parts.slice(0,i).join('/');const fc=state.folderCredentials.find(f=>f.path===p);if(fc?.remote_access_credential_id){const cr=state.credentials.find(c=>c.id===fc.remote_access_credential_id);if(cr)return{name:cr.name,from:p};}} return null; })();
-        return `
       <div class="form-group">
         <label>Command Credentials</label>
         <select id="f-credential">
-          <option value="">${!src?.credential_id && cmdInherit ? `↑ Inherited: ${escape(cmdInherit.name)} (from ${escape(cmdInherit.from)})` : '— none —'}</option>
+          <option value="">${_cmdPlaceholder}</option>
           ${state.credentials.map(c => `<option value="${c.id}" ${src?.credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
         </select>
         <div class="hint">Used for SSH/WinRM command execution</div>
@@ -1743,12 +1747,11 @@ function openModal(type, id = null, defaultGroup = '') {
       <div class="form-group">
         <label>Remote Access Credentials</label>
         <select id="f-ra-credential">
-          <option value="">${!src?.remote_access_credential_id && raInherit ? `↑ Inherited: ${escape(raInherit.name)} (from ${escape(raInherit.from)})` : '— none —'}</option>
+          <option value="">${_raPlaceholder}</option>
           ${state.credentials.map(c => `<option value="${c.id}" ${src?.remote_access_credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
         </select>
         <div class="hint">Used for remote access (VNC/RDP)</div>
-      </div>`;
-      })()}
+      </div>
       <div class="form-group">
         <label>Description</label>
         <input id="f-desc" value="${escape(src?.description ?? '')}" placeholder="Optional">
