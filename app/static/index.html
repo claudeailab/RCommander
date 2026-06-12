@@ -1737,7 +1737,7 @@ function openModal(type, id = null, defaultGroup = '') {
           <option value="">— none —</option>
           ${state.credentials.map(c => `<option value="${c.id}" ${src?.credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
         </select>
-        <div class="hint">Used for SSH/WinRM command execution</div>
+        <div class="hint">${(() => { if (src?.credential_id) return 'Used for SSH/WinRM command execution'; const parts = (groupValue||'').split('/').filter(Boolean); for (let i=parts.length;i>0;i--){const p=parts.slice(0,i).join('/');const fc=state.folderCredentials.find(f=>f.path===p);if(fc?.credential_id){const cr=state.credentials.find(c=>c.id===fc.credential_id);if(cr)return `Inheriting <strong>${escape(cr.name)}</strong> from folder "${escape(p)}" ↑`;}} return 'Used for SSH/WinRM command execution'; })()}</div>
       </div>
       <div class="form-group">
         <label>Remote Access Credentials</label>
@@ -1745,7 +1745,7 @@ function openModal(type, id = null, defaultGroup = '') {
           <option value="">— none —</option>
           ${state.credentials.map(c => `<option value="${c.id}" ${src?.remote_access_credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
         </select>
-        <div class="hint">Used for VNC and RDP connections</div>
+        <div class="hint">${(() => { if (src?.remote_access_credential_id) return 'Used for VNC and RDP connections'; const parts = (groupValue||'').split('/').filter(Boolean); for (let i=parts.length;i>0;i--){const p=parts.slice(0,i).join('/');const fc=state.folderCredentials.find(f=>f.path===p);if(fc?.remote_access_credential_id){const cr=state.credentials.find(c=>c.id===fc.remote_access_credential_id);if(cr)return `Inheriting <strong>${escape(cr.name)}</strong> from folder "${escape(p)}" ↑`;}} return 'Used for VNC and RDP connections'; })()}</div>
       </div>
       <div class="form-group">
         <label>Description</label>
@@ -2766,7 +2766,7 @@ function renderRemoteAccess() {
     const expanded = _raExpanded.has(path);
     const total = _bulkCountAll(path, nodes);
     const pl = 8 + depth * 16;
-    let html = `<div class="bulk-row" style="padding:8px 10px 8px ${pl}px;cursor:pointer;user-select:none" onclick="raToggleFolder(${JSON.stringify(path)})">
+    let html = `<div class="bulk-row" style="padding:8px 10px 8px ${pl}px;cursor:pointer;user-select:none" onclick="raToggleFolder('${escape(path)}')">
       <span style="flex-shrink:0;font-size:10px;color:var(--muted);width:12px">${expanded ? '▼' : '▶'}</span>
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent-h)" stroke-width="2" style="flex-shrink:0">
         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -2808,7 +2808,7 @@ function _raServerRowHTML(s, depth) {
       <button class="btn btn-ghost btn-sm" onclick="raSendCommand(${s.id})"
         style="font-size:11px;padding:3px 9px"${!hasCmdCred ? ' title="No Command Credentials configured"' : ''}>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-        Send Cmd
+        Command
       </button>
       <button class="btn btn-ghost btn-sm" onclick="raConnect(${s.id},'vnc')"
         style="font-size:11px;padding:3px 9px;color:#58a6ff;border-color:#58a6ff44"${!hasRaCred ? ' title="No Remote Access Credentials configured"' : ''}>VNC</button>
