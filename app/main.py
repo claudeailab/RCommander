@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.50"
+APP_VERSION = "1.6.51"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1223,32 +1223,59 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             raise ValueError("Cannot load RSA private key")
         key_size = (private_key.key_size + 7) // 8
 
-        # Check if server sends the encrypted key immediately (pre-installed pubkey)
-        # or if it expects us to send our public key first
-        try:
-            server_first = await asyncio.wait_for(reader.read(key_size), timeout=2.0)
-        except asyncio.TimeoutError:
-            server_first = b""
-
-        if server_first:
-            print(f"[VNC {label}] Type-17: server sent {len(server_first)}B first: {server_first[:8].hex()}")
-
-        if len(server_first) >= key_size:
-            # Server already has our pubkey installed and sent the encrypted session key
-            encrypted_key = server_first[:key_size]
-        else:
-            # Server is waiting for our public key — send it (SubjectPublicKeyInfo DER)
-            pub_der = private_key.public_key().public_bytes(
-                encoding=serialization.Encoding.DER,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo)
-            writer.write(len(pub_der).to_bytes(4, "big") + pub_der)
-            await writer.drain()
-            print(f"[VNC {label}] DSM: sent public key ({len(pub_der)}B), waiting for session key")
+        # Read server's type-17 greeting (capabilities + sub-type list)
+        # e.g. [ff ff ff ff][02][73 72] = capabilities(4) + count(1) + subtypes[n]
+        # We may receive multiple chunks; drain up to ~64B within 2s
+        server_greeting = b""
+        deadline = asyncio.get_event_loop().time() + 2.0
+        while asyncio.get_event_loop().time() < deadline:
             try:
-                rest = await asyncio.wait_for(reader.readexactly(key_size - len(server_first)), timeout=10.0)
+                chunk = await asyncio.wait_for(
+                    reader.read(4096), timeout=deadline - asyncio.get_event_loop().time())
+                if not chunk:
+                    break
+                server_greeting += chunk
+                if len(server_greeting) >= key_size:
+                    break   # got full encrypted key already
+                # if it looks like a greeting (not key_size bytes), stop reading
+                if len(server_greeting) < key_size and len(chunk) < key_size:
+                    break
             except asyncio.TimeoutError:
-                raise ValueError("DSM: server did not send session key after receiving public key")
-            encrypted_key = server_first + rest
+                break
+
+        print(f"[VNC {label}] Type-17 greeting: {len(server_greeting)}B "
+              f"hex={server_greeting.hex()}")
+
+        if len(server_greeting) >= key_size:
+            # Server already sent the encrypted session key (pre-installed pubkey variant)
+            encrypted_key = server_greeting[:key_size]
+            print(f"[VNC {label}] DSM: server sent key directly")
+        else:
+            # Server is waiting for our public key.
+            # Try PKCS#1 DER first (raw RSA key, no AlgorithmIdentifier wrapper),
+            # then SubjectPublicKeyInfo if the first attempt is rejected.
+            pub_pkcs1 = private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PublicFormat.PKCS1)
+            # Send without a length prefix — raw DER
+            writer.write(pub_pkcs1)
+            await writer.drain()
+            print(f"[VNC {label}] DSM: sent PKCS1 pub key ({len(pub_pkcs1)}B, no prefix), "
+                  f"waiting for {key_size}B encrypted session key")
+
+            # Read server's encrypted session key
+            enc_buf = b""
+            try:
+                enc_buf = await asyncio.wait_for(reader.read(key_size * 2), timeout=5.0)
+                print(f"[VNC {label}] DSM: server replied {len(enc_buf)}B: "
+                      f"hex={enc_buf[:16].hex()}")
+            except asyncio.TimeoutError:
+                print(f"[VNC {label}] DSM: no response after PKCS1 key — connection dead?")
+                raise ValueError("DSM: server did not respond after receiving public key")
+
+            if len(enc_buf) < key_size:
+                raise ValueError(f"DSM: expected {key_size}B encrypted key, got {len(enc_buf)}B")
+            encrypted_key = enc_buf[:key_size]
 
         print(f"[VNC {label}] DSM: decrypting {len(encrypted_key)}B session key")
         aes_key = None
@@ -1257,7 +1284,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                                       algorithm=hashes.SHA1(), label=None)]:
             try:
                 aes_key = private_key.decrypt(encrypted_key, pad)
-                print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__}, {len(aes_key)}B raw)")
+                print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__}, {len(aes_key)}B)")
                 break
             except Exception as e:
                 print(f"[VNC {label}] {type(pad).__name__} failed: {e}")
