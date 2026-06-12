@@ -1726,7 +1726,9 @@ function openModal(type, id = null, defaultGroup = '') {
       ? `Set directly on this server — select <em>— none —</em> to use the folder credential instead`
       : (_effRa?.inherited  ? `Inherited from folder <em>${escape(_effRa.from)}</em> — <strong>${escape(_raCredName)}</strong>`  : 'No credentials configured on this server or its folder');
     const _effCt = src ? getEffectiveConnectionTypes(src) : null;
-    const _ctChecked = (src?.connection_types || '').split(',').filter(Boolean);
+    const _ctChecked = src?.connection_types
+      ? src.connection_types.split(',').filter(Boolean)
+      : (_effCt?.types || []);
     const _ctHint = src?.connection_types
       ? `Set directly on this server — uncheck all to inherit from folder`
       : (_effCt?.inherited
