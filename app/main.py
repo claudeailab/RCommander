@@ -112,7 +112,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.29"
+APP_VERSION = "1.6.30"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1094,6 +1094,7 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
                     msgs += 1
                     print(f"[VNC {host_label}] ws→tcp text #{msgs}: {msg['text'][:50]!r}")
                     writer.write(msg["text"].encode())
+                await writer.drain()
         except Exception as e:
             print(f"[VNC {host_label}] ws_to_tcp ended: {e}")
 
