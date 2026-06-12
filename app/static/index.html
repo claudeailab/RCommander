@@ -1700,17 +1700,17 @@ function openModal(type, id = null, defaultGroup = '') {
     const _cmdCredName = state.credentials.find(c=>c.id===_effCmd?.id)?.name || '';
     const _raCredName  = state.credentials.find(c=>c.id===_effRa?.id)?.name  || '';
     const _cmdPlaceholder = _effCmd?.inherited
-      ? `↑ Propagated from folder: ${escape(_cmdCredName)} (from ${escape(_effCmd.from)})`
+      ? `Inherited: ${escape(_cmdCredName)} (from ${escape(_effCmd.from)})`
       : '— none (select to set, or leave blank to inherit from folder) —';
     const _raPlaceholder  = _effRa?.inherited
-      ? `↑ Propagated from folder: ${escape(_raCredName)} (from ${escape(_effRa.from)})`
+      ? `Inherited: ${escape(_raCredName)} (from ${escape(_effRa.from)})`
       : '— none (select to set, or leave blank to inherit from folder) —';
     const _cmdHint = src?.credential_id
       ? `Set directly on this server — select <em>— none —</em> to use the folder credential instead`
-      : (_effCmd?.inherited ? `↑ Propagated from folder <em>${escape(_effCmd.from)}</em> — <strong>${escape(_cmdCredName)}</strong>` : 'No credentials configured on this server or its folder');
+      : (_effCmd?.inherited ? `Inherited from folder <em>${escape(_effCmd.from)}</em> — <strong>${escape(_cmdCredName)}</strong>` : 'No credentials configured on this server or its folder');
     const _raHint  = src?.remote_access_credential_id
       ? `Set directly on this server — select <em>— none —</em> to use the folder credential instead`
-      : (_effRa?.inherited  ? `↑ Propagated from folder <em>${escape(_effRa.from)}</em> — <strong>${escape(_raCredName)}</strong>`  : 'No credentials configured on this server or its folder');
+      : (_effRa?.inherited  ? `Inherited from folder <em>${escape(_effRa.from)}</em> — <strong>${escape(_raCredName)}</strong>`  : 'No credentials configured on this server or its folder');
     const title = s ? 'Edit Server' : (_cloneSource ? `Clone "${_cloneSource.name}"` : 'Add Server');
     modalBox.innerHTML = `
       ${modalHeader(title)}
