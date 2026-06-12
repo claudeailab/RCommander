@@ -849,49 +849,16 @@
   <!-- REMOTE ACCESS -->
   <div id="tab-remote-access" style="display:none">
     <div class="topbar"><span class="page-title">Remote Access</span></div>
-    <div class="content" style="max-width:520px">
-      <div class="form-group">
-        <label>Server</label>
-        <div id="ra-folder-path"></div>
-        <select id="ra-server" onchange="raServerChange()">
-          <option value="">— select server —</option>
-        </select>
+    <div class="content" style="max-width:900px">
+      <div style="margin-bottom:12px;position:relative">
+        <input id="ra-search" type="text" placeholder="Search servers…" oninput="renderRemoteAccess()"
+          style="width:100%;padding:7px 10px 7px 30px;background:var(--input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2.5"
+          style="position:absolute;left:10px;top:50%;transform:translateY(-50%);pointer-events:none">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
       </div>
-      <div class="form-group">
-        <label>Protocol</label>
-        <select id="ra-protocol" onchange="raProtocolChange()">
-          <option value="rdp">RDP</option>
-          <option value="vnc">VNC</option>
-          <option value="ssh">SSH</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Credentials</label>
-        <input type="hidden" id="ra-credential" value="">
-        <div class="cmd-select" id="ra-cred-custom">
-          <div class="cmd-select-trigger" onclick="toggleRaCredSelect()">
-            <span id="ra-cred-label" style="color:var(--muted)">— select credential —</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-          </div>
-          <div class="cmd-select-menu" id="ra-cred-menu"></div>
-        </div>
-      </div>
-      <div id="ra-vnc-options" style="display:none">
-        <div class="form-group">
-          <label>DSM Plugin (optional)</label>
-          <select id="ra-vnc-dsm"><option value="">— none —</option></select>
-        </div>
-        <div class="form-group">
-          <label>Client Key (optional)</label>
-          <select id="ra-vnc-client-key"><option value="">— none —</option></select>
-        </div>
-      </div>
-      <div style="margin-top:8px">
-        <button class="btn btn-run" id="ra-connect-btn" onclick="connectRemoteAccess()">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-          Connect
-        </button>
-      </div>
+      <div id="ra-tree" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"></div>
     </div>
   </div>
 
@@ -1244,6 +1211,17 @@ function getEffectiveCredential(server) {
     const path = parts.slice(0, i).join('/');
     const fc = state.folderCredentials.find(f => f.path === path);
     if (fc?.credential_id) return { id: fc.credential_id, inherited: true, from: path };
+  }
+  return null;
+}
+
+function getEffectiveRemoteAccessCredential(server) {
+  if (server.remote_access_credential_id) return { id: server.remote_access_credential_id, inherited: false };
+  const parts = (server.server_group || '').split('/').filter(Boolean);
+  for (let i = parts.length; i > 0; i--) {
+    const path = parts.slice(0, i).join('/');
+    const fc = state.folderCredentials.find(f => f.path === path);
+    if (fc?.remote_access_credential_id) return { id: fc.remote_access_credential_id, inherited: true, from: path };
   }
   return null;
 }
@@ -1754,12 +1732,20 @@ function openModal(type, id = null, defaultGroup = '') {
         <div class="hint" id="f-group-hint">${groupValue ? 'Folder: ' + escape(groupValue) : 'No folder selected'}</div>
       </div>
       <div class="form-group">
-        <label>Default Credential</label>
+        <label>Command Credentials</label>
         <select id="f-credential">
           <option value="">— none —</option>
           ${state.credentials.map(c => `<option value="${c.id}" ${src?.credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
         </select>
-        <div class="hint">Auto-selected on the Execute tab</div>
+        <div class="hint">Used for SSH/WinRM command execution</div>
+      </div>
+      <div class="form-group">
+        <label>Remote Access Credentials</label>
+        <select id="f-ra-credential">
+          <option value="">— none —</option>
+          ${state.credentials.map(c => `<option value="${c.id}" ${src?.remote_access_credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
+        </select>
+        <div class="hint">Used for VNC and RDP connections</div>
       </div>
       <div class="form-group">
         <label>Description</label>
@@ -1889,9 +1875,11 @@ async function saveEntity(resource, label, body) {
 
 async function saveServer() {
   const credVal = document.getElementById('f-credential')?.value;
+  const raCredVal = document.getElementById('f-ra-credential')?.value;
   const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22,
     type: val('f-type'), description: val('f-desc'), server_group: val('f-group'),
-    credential_id: credVal ? parseInt(credVal) : null };
+    credential_id: credVal ? parseInt(credVal) : null,
+    remote_access_credential_id: raCredVal ? parseInt(raCredVal) : null };
   if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
   await saveEntity('servers', 'Server', body);
 }
@@ -2176,12 +2164,20 @@ function openEditFolderModal(fullPath) {
       </div>
     </div>
     <div class="form-group">
-      <label>Credential</label>
+      <label>Command Credentials</label>
       <select id="f-folder-cred">
         <option value="">— none —</option>
         ${state.credentials.map(c => `<option value="${c.id}" ${fc?.credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('')}
       </select>
-      <div class="hint">All servers in this folder inherit this credential unless they have their own.</div>
+      <div class="hint">Inherited by servers in this folder for command execution.</div>
+    </div>
+    <div class="form-group">
+      <label>Remote Access Credentials</label>
+      <select id="f-folder-ra-cred">
+        <option value="">— none —</option>
+        ${state.credentials.map(c => `<option value="${c.id}" ${fc?.remote_access_credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('')}
+      </select>
+      <div class="hint">Inherited by servers in this folder for VNC and RDP.</div>
     </div>
     ${modalFooter('_saveEditFolder')}`;
 
@@ -2205,15 +2201,15 @@ async function _saveEditFolder() {
   const newParent = getDest();
   const newPath = newParent ? newParent + '/' + newLeaf : newLeaf;
   const credId = document.getElementById('f-folder-cred')?.value;
+  const raCredId = document.getElementById('f-folder-ra-cred')?.value;
   try {
     if (newPath !== fullPath) {
       await api('PUT', '/api/groups/rename', { old_name: fullPath, new_name: newPath });
     }
-    if (credId) {
-      await api('PUT', `/api/folder-credentials/${newPath}`, { credential_id: +credId });
-    } else {
-      await api('DELETE', `/api/folder-credentials/${newPath}`).catch(() => {});
-    }
+    await api('PUT', `/api/folder-credentials/${newPath}`, {
+      credential_id: credId ? +credId : null,
+      remote_access_credential_id: raCredId ? +raCredId : null,
+    });
     closeModal(); await loadAll(); toast('Folder saved');
   } catch(e) { toast(e.message, 'fail'); }
 }
@@ -2745,184 +2741,205 @@ async function runBulkServer(server, cmd, outEl) {
 
 // ── Remote Access ─────────────────────────────────────────────────────────────
 
-let _raPath = null;
-
-function _raChildFolders(parentPath) {
-  const prefix = parentPath === '' ? '' : parentPath + '/';
-  const depth  = parentPath === '' ? 0 : parentPath.split('/').length;
-  return state.groups
-    .filter(g => parentPath === '' ? g.split('/').length === 1 : g.startsWith(prefix) && g.split('/').length === depth + 1)
-    .sort();
-}
-
-function _renderRaFolderPath() {
-  const container = document.getElementById('ra-folder-path');
-  if (!container) return;
-  const levels = _raPath ? _raPath.split('/').map((_, i, arr) => arr.slice(0, i + 1).join('/')) : [];
-  let html = '';
-  const topFolders = _raChildFolders('');
-  if (topFolders.length > 0) {
-    const topVal = levels.length > 0 ? levels[0] : '';
-    html += `<select class="exec-folder-sel" data-level="0" onchange="_onRaFolderChange(this)">
-      <option value="">— select folder —</option>` +
-      topFolders.map(f => `<option value="${escape(f)}" ${f===topVal?'selected':''}>${escape(f)}</option>`).join('') +
-      `</select>`;
-    for (let i = 0; i < levels.length; i++) {
-      const children = _raChildFolders(levels[i]);
-      if (children.length === 0) break;
-      const childVal = levels[i + 1] || '';
-      html += `<select class="exec-folder-sel" data-level="${i+1}" onchange="_onRaFolderChange(this)">
-        <option value="">— select subfolder —</option>` +
-        children.map(f => `<option value="${escape(f)}" ${f===childVal?'selected':''}>${escape(f.split('/').pop())}</option>`).join('') +
-        `</select>`;
-    }
-  }
-  container.innerHTML = html;
-  _updateRaServerOptions();
-}
-
-function _onRaFolderChange(sel) {
-  _raPath = sel.value === '' ? null : sel.value;
-  _renderRaFolderPath();
-}
-
-function _updateRaServerOptions() {
-  const el = document.getElementById('ra-server');
-  if (!el) return;
-  const cur = el.value;
-  const servers = _raPath === null ? state.servers : state.servers.filter(s => s.server_group === _raPath);
-  el.innerHTML = `<option value="">— select server —</option>` +
-    servers.map(s => `<option value="${s.id}" ${s.id==cur?'selected':''}>${escape(s.name)}</option>`).join('');
-  if (cur && !servers.find(s => s.id == cur)) el.value = '';
-}
-
-function raServerChange() {
-  const id = document.getElementById('ra-server').value;
-  if (id) {
-    const server = state.servers.find(s => s.id == id);
-    if (server) {
-      const eff = getEffectiveCredential(server);
-      if (eff) { document.getElementById('ra-credential').value = eff.id; _updateRaCredLabel(); }
-    }
-  }
-}
-
-function _renderRaCredMenu(query) {
-  const menu = document.getElementById('ra-cred-menu');
-  if (!menu) return;
-  const q = (query || '').toLowerCase();
-  const filtered = state.credentials.filter(c => !q || c.name.toLowerCase().includes(q));
-  const selectedId = document.getElementById('ra-credential').value;
-  menu.innerHTML = `
-    <div class="cmd-search-wrap">
-      <input id="ra-cred-search" class="cmd-search" placeholder="Search…" autocomplete="off"
-        oninput="_renderRaCredMenu(this.value)" onclick="event.stopPropagation()">
-    </div>
-    <div class="cmd-select-opts">
-      <div class="cmd-select-opt${!selectedId ? ' selected' : ''}" data-value="">
-        <span style="color:var(--muted)">— select credential —</span>
-      </div>
-      ${filtered.map(c => `<div class="cmd-select-opt${c.id == selectedId ? ' selected' : ''}" data-value="${c.id}">${escape(c.name)}</div>`).join('')}
-    </div>`;
-  if (q) { const si = menu.querySelector('#ra-cred-search'); if (si) { si.value = q; si.focus(); } }
-}
-
-function toggleRaCredSelect() {
-  const menu = document.getElementById('ra-cred-menu');
-  const isOpen = menu.classList.contains('open');
-  document.querySelectorAll('.cmd-select-menu.open').forEach(m => m.classList.remove('open'));
-  if (!isOpen) { _renderRaCredMenu(''); menu.classList.add('open'); setTimeout(() => menu.querySelector('#ra-cred-search')?.focus(), 50); }
-}
-
-document.getElementById('ra-cred-menu').addEventListener('click', e => {
-  const opt = e.target.closest('.cmd-select-opt');
-  if (!opt) return;
-  document.getElementById('ra-credential').value = opt.dataset.value || '';
-  document.getElementById('ra-cred-menu').classList.remove('open');
-  _updateRaCredLabel();
-});
-
-function _updateRaCredLabel() {
-  const val = document.getElementById('ra-credential').value;
-  const label = document.getElementById('ra-cred-label');
-  if (!label) return;
-  const cred = state.credentials.find(c => c.id == val);
-  if (cred) { label.textContent = cred.name; label.style.color = ''; }
-  else { label.textContent = '— select credential —'; label.style.color = 'var(--muted)'; }
-}
+const _raExpanded = new Set();
 
 function renderRemoteAccess() {
-  _renderRaFolderPath();
-  _updateRaCredLabel();
-  const dsmSel = document.getElementById('ra-vnc-dsm');
-  const ckSel = document.getElementById('ra-vnc-client-key');
-  if (dsmSel) {
-    const dv = dsmSel.value;
-    dsmSel.innerHTML = '<option value="">— none —</option>' +
-      state.vncFiles.filter(f => f.file_type === 'dsm').map(f => `<option value="${f.id}" ${f.id == dv ? 'selected' : ''}>${escape(f.name)}</option>`).join('');
+  const container = document.getElementById('ra-tree');
+  if (!container) return;
+  const query = (document.getElementById('ra-search')?.value || '').toLowerCase().trim();
+  const { nodes, roots } = _buildBulkNodes();
+
+  if (query) {
+    const matched = state.servers.filter(s =>
+      s.name.toLowerCase().includes(query) ||
+      (s.host || '').toLowerCase().includes(query) ||
+      (s.server_group || '').toLowerCase().includes(query)
+    );
+    container.innerHTML = matched.length
+      ? matched.map(s => _raServerRowHTML(s, 0)).join('')
+      : `<div style="padding:20px;color:var(--muted);font-size:13px;text-align:center">No servers match</div>`;
+    return;
   }
-  if (ckSel) {
-    const cv2 = ckSel.value;
-    ckSel.innerHTML = '<option value="">— none —</option>' +
-      state.vncFiles.filter(f => f.file_type === 'client_key').map(f => `<option value="${f.id}" ${f.id == cv2 ? 'selected' : ''}>${escape(f.name)}</option>`).join('');
+
+  function raFolderRow(path, depth) {
+    const label = path.split('/').pop();
+    const expanded = _raExpanded.has(path);
+    const total = _bulkCountAll(path, nodes);
+    const pl = 8 + depth * 16;
+    let html = `<div class="bulk-row" style="padding:8px 10px 8px ${pl}px;cursor:pointer;user-select:none" onclick="raToggleFolder(${JSON.stringify(path)})">
+      <span style="flex-shrink:0;font-size:10px;color:var(--muted);width:12px">${expanded ? '▼' : '▶'}</span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent-h)" stroke-width="2" style="flex-shrink:0">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+      <strong style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px">${escape(label)}</strong>
+      <span style="flex-shrink:0;color:var(--muted);font-size:11px">(${total})</span>
+    </div>`;
+    if (expanded) {
+      for (const child of [...nodes[path].children].sort()) html += raFolderRow(child, depth + 1);
+      for (const s of nodes[path].servers) html += _raServerRowHTML(s, depth + 1);
+    }
+    return html;
   }
+
+  let html = '';
+  for (const root of [...roots].sort()) html += raFolderRow(root, 0);
+  for (const s of state.servers.filter(s => !s.server_group)) html += _raServerRowHTML(s, 0);
+  if (!html) html = `<div style="padding:20px;color:var(--muted);font-size:13px;text-align:center">No servers yet — add servers in Settings</div>`;
+  container.innerHTML = html;
 }
 
-function raProtocolChange() {
-  const proto = document.getElementById('ra-protocol').value;
-  document.getElementById('ra-vnc-options').style.display = proto === 'vnc' ? '' : 'none';
+function raToggleFolder(path) {
+  if (_raExpanded.has(path)) _raExpanded.delete(path); else _raExpanded.add(path);
+  renderRemoteAccess();
 }
 
-async function connectRemoteAccess() {
-  const serverId = document.getElementById('ra-server').value;
-  const credId = document.getElementById('ra-credential').value;
-  const protocol = document.getElementById('ra-protocol').value;
-  if (!serverId) { toast('Select a server', 'fail'); return; }
-  if (!credId) { toast('Select credentials', 'fail'); return; }
-  const btn = document.getElementById('ra-connect-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
-  const rdpDef = getRdpDefaultSettings();
-  const defaultPorts = { rdp: rdpDef.port || 3389, vnc: 5900, ssh: 22 };
-  const port = defaultPorts[protocol] || 22;
+function _raServerRowHTML(s, depth) {
+  const pl = 8 + depth * 16;
+  const host = escape(s.host + (s.port ? ':' + s.port : ''));
+  const hasCmdCred = !!getEffectiveCredential(s);
+  const hasRaCred  = !!getEffectiveRemoteAccessCredential(s);
+  return `<div style="padding:8px 10px 8px ${pl}px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;border-top:1px solid var(--border);background:var(--bg2)">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" style="flex-shrink:0">
+      <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+    </svg>
+    <span style="font-size:13px;font-weight:500;flex:1;min-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escape(s.name)}">${escape(s.name)}</span>
+    <span style="font-size:11px;color:var(--muted);font-family:monospace;flex-shrink:0">${host}</span>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-left:auto">
+      <button class="btn btn-ghost btn-sm" onclick="raSendCommand(${s.id})"
+        style="font-size:11px;padding:3px 9px"${!hasCmdCred ? ' title="No Command Credentials configured"' : ''}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        Send Cmd
+      </button>
+      <button class="btn btn-ghost btn-sm" onclick="raConnect(${s.id},'vnc')"
+        style="font-size:11px;padding:3px 9px;color:#58a6ff;border-color:#58a6ff44"${!hasRaCred ? ' title="No Remote Access Credentials configured"' : ''}>VNC</button>
+      <button class="btn btn-ghost btn-sm" onclick="raConnect(${s.id},'rdp')"
+        style="font-size:11px;padding:3px 9px;color:#a371f7;border-color:#a371f744"${!hasRaCred ? ' title="No Remote Access Credentials configured"' : ''}>RDP</button>
+    </div>
+  </div>`;
+}
+
+async function raConnect(serverId, protocol) {
   const server = state.servers.find(s => s.id == serverId);
-  const label = `${server?.name || 'Server'} (${protocol.toUpperCase()})`;
+  if (!server) return;
+  const effCred = getEffectiveRemoteAccessCredential(server);
+  if (!effCred) {
+    toast(`No Remote Access Credentials for "${escape(server.name)}" — configure them in Settings`, 'fail');
+    return;
+  }
+  const rdpDef = getRdpDefaultSettings();
   try {
-    let win = null;
+    let win;
     if (protocol === 'vnc') {
-      const dsmId = document.getElementById('ra-vnc-dsm')?.value;
-      const ckId = document.getElementById('ra-vnc-client-key')?.value;
-      const data = await api('POST', '/api/vnc-session', { server_id: +serverId, credential_id: +credId, port,
-        vnc_dsm_file_id: dsmId ? +dsmId : null, vnc_client_key_file_id: ckId ? +ckId : null });
+      const data = await api('POST', '/api/vnc-session', { server_id: server.id, credential_id: effCred.id, port: 5900 });
       win = window.open('/vnc/' + data.token, '_blank');
     } else if (protocol === 'rdp') {
       const [w, h] = _getRdpResolution(rdpDef);
       const data = await api('POST', '/api/rdp-session', {
-        server_id: +serverId, credential_id: +credId, port,
-        rdp_security: rdpDef.security || 'any',
-        rdp_console: rdpDef.console || false,
-        width: w, height: h,
-        color_depth: rdpDef.color_depth || 32,
+        server_id: server.id, credential_id: effCred.id, port: rdpDef.port || 3389,
+        rdp_security: rdpDef.security || 'any', rdp_console: rdpDef.console || false,
+        width: w, height: h, color_depth: rdpDef.color_depth || 32,
         disable_audio: rdpDef.disable_audio !== false,
         enable_wallpaper: rdpDef.enable_wallpaper !== false,
         enable_font_smoothing: rdpDef.enable_font_smoothing || false,
         enable_desktop_composition: rdpDef.enable_desktop_composition !== false,
         resize_method: rdpDef.resize_method || 'display-update',
-        cursor: rdpDef.cursor || 'local',
-        dpi: rdpDef.dpi || 96,
+        cursor: rdpDef.cursor || 'local', dpi: rdpDef.dpi || 96,
       });
       win = window.open('/rdp/' + data.token, '_blank');
-    } else if (protocol === 'ssh') {
-      const sshDef = getSshDefaultSettings();
-      const data = await api('POST', '/api/ssh-session', { server_id: +serverId, credential_id: +credId, port: sshDef.port || 22 });
-      win = window.open('/ssh/' + data.token, '_blank');
     }
-    if (!win) { toast('Popup blocked — please allow popups for this site', 'fail'); }
-  } catch (e) {
+    if (!win) toast('Popup blocked — allow popups for this site', 'fail');
+  } catch(e) {
     toast(protocol.toUpperCase() + ' error: ' + e.message, 'fail');
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Connect'; }
   }
 }
+
+function raSendCommand(serverId) {
+  const server = state.servers.find(s => s.id == serverId);
+  if (!server) return;
+  const effCred = getEffectiveCredential(server);
+  const cmds = state.commands;
+  modalBox.innerHTML = `
+    ${modalHeader('Send Command — ' + escape(server.name))}
+    <div class="form-group">
+      <label>Command</label>
+      <select id="ra-cmd-sel" onchange="raUpdateCmdPreview()" style="width:100%">
+        <option value="">— select command —</option>
+        ${cmds.map(c => `<option value="${c.id}">${escape(c.name)}${c.shell_type ? ' [' + c.shell_type.toUpperCase() + ']' : ''}</option>`).join('')}
+      </select>
+    </div>
+    <div id="ra-cmd-preview" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;font-family:monospace;font-size:12px;color:var(--muted);word-break:break-all;margin-bottom:4px;white-space:pre-wrap"></div>
+    ${!effCred ? `<div style="color:var(--warn);font-size:12px;padding:4px 0 8px">⚠ No Command Credentials — configure them in Settings &gt; Servers</div>` : ''}
+    <div id="ra-exec-out" class="terminal" style="display:none;height:200px;margin:10px 0"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:4px">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      <button class="btn btn-run" id="ra-exec-btn" onclick="raExecuteCommand(${serverId})"${!effCred ? ' disabled' : ''}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Send Command
+      </button>
+    </div>`;
+  showModal('#ra-cmd-sel');
+}
+
+function raUpdateCmdPreview() {
+  const sel = document.getElementById('ra-cmd-sel');
+  const preview = document.getElementById('ra-cmd-preview');
+  if (!sel || !preview) return;
+  const cmd = state.commands.find(c => c.id == sel.value);
+  if (cmd) { preview.textContent = cmd.command; preview.style.display = ''; }
+  else preview.style.display = 'none';
+}
+
+async function raExecuteCommand(serverId) {
+  const server = state.servers.find(s => s.id == serverId);
+  if (!server) return;
+  const cmdId = document.getElementById('ra-cmd-sel')?.value;
+  if (!cmdId) { toast('Select a command', 'fail'); return; }
+  const effCred = getEffectiveCredential(server);
+  if (!effCred) { toast('No Command Credentials configured', 'fail'); return; }
+  const btn = document.getElementById('ra-exec-btn');
+  const outEl = document.getElementById('ra-exec-out');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Running…'; }
+  if (outEl) { outEl.style.display = ''; outEl.innerHTML = `<div class="terminal-line meta">▶ Connecting to ${escape(server.host)}…</div>`; }
+  try {
+    const res = await fetch('/api/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ server_id: server.id, credential_id: effCred.id, command_id: +cmdId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      if (outEl) outEl.innerHTML += `<div class="terminal-line error">Error: ${escape(err.detail)}</div>`;
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n'); buf = parts.pop();
+      for (const part of parts) {
+        const line = part.replace(/^data: /, '').trim();
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (!outEl) continue;
+          if (ev.type === 'stdout') outEl.innerHTML += `<span class="terminal-line stdout">${escape(ev.text)}</span>`;
+          else if (ev.type === 'stderr') outEl.innerHTML += `<span class="terminal-line stderr">${escape(ev.text)}</span>`;
+          else if (ev.type === 'error') outEl.innerHTML += `<div class="terminal-line error">Error: ${escape(ev.text)}</div>`;
+          else if (ev.type === 'exit') outEl.innerHTML += `<div class="terminal-line ${ev.code===0?'success':'error'}">${ev.code===0?'✔ Done':'✖ Exit code '+ev.code}</div>`;
+          outEl.scrollTop = outEl.scrollHeight;
+        } catch(_) {}
+      }
+    }
+  } catch(e) {
+    if (outEl) outEl.innerHTML += `<div class="terminal-line error">${escape(e.message)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Send Command'; }
+  }
+}
+
 
 // ── VNC Files ─────────────────────────────────────────────────────────────────
 

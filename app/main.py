@@ -35,6 +35,7 @@ class ServerRow(Base):
     type = Column(String, nullable=False, default="ssh")
     description = Column(Text, default="")
     credential_id = Column(Integer, nullable=True)
+    remote_access_credential_id = Column(Integer, nullable=True)
     server_group = Column(String, default="")
     vnc_dsm_file_id = Column(Integer, nullable=True)
     vnc_client_key_file_id = Column(Integer, nullable=True)
@@ -70,7 +71,8 @@ class FolderCredentialRow(Base):
     __tablename__ = "folder_credentials"
     id = Column(Integer, primary_key=True, index=True)
     path = Column(String, unique=True, nullable=False)
-    credential_id = Column(Integer, nullable=False)
+    credential_id = Column(Integer, nullable=True)
+    remote_access_credential_id = Column(Integer, nullable=True)
 
 
 class VncFileRow(Base):
@@ -91,15 +93,17 @@ os.makedirs(VNC_FILES_DIR, exist_ok=True)
 def _migrate():
     """Add columns introduced after initial release without dropping existing data."""
     migrations = {
-        "servers":     [("description",           "TEXT NOT NULL DEFAULT ''"),
-                        ("credential_id",          "INTEGER"),
-                        ("server_group",           "TEXT NOT NULL DEFAULT ''"),
-                        ("vnc_dsm_file_id",        "INTEGER"),
-                        ("vnc_client_key_file_id", "INTEGER")],
-        "credentials": [("description",   "TEXT NOT NULL DEFAULT ''")],
-        "commands":    [("description",   "TEXT NOT NULL DEFAULT ''"),
-                        ("server_id",     "INTEGER"),
-                        ("shell_type",    "TEXT NOT NULL DEFAULT 'cmd'")],
+        "servers":            [("description",                   "TEXT NOT NULL DEFAULT ''"),
+                               ("credential_id",                  "INTEGER"),
+                               ("remote_access_credential_id",    "INTEGER"),
+                               ("server_group",                   "TEXT NOT NULL DEFAULT ''"),
+                               ("vnc_dsm_file_id",                "INTEGER"),
+                               ("vnc_client_key_file_id",         "INTEGER")],
+        "credentials":        [("description",   "TEXT NOT NULL DEFAULT ''")],
+        "commands":           [("description",   "TEXT NOT NULL DEFAULT ''"),
+                               ("server_id",     "INTEGER"),
+                               ("shell_type",    "TEXT NOT NULL DEFAULT 'cmd'")],
+        "folder_credentials": [("remote_access_credential_id",    "INTEGER")],
     }
     with engine.connect() as conn:
         for table, columns in migrations.items():
@@ -112,7 +116,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.30"
+APP_VERSION = "1.6.31"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -551,6 +555,7 @@ class ServerIn(BaseModel):
     type: Literal["ssh", "winrm"] = "ssh"
     description: str = ""
     credential_id: Optional[int] = None
+    remote_access_credential_id: Optional[int] = None
     server_group: str = ""
     vnc_dsm_file_id: Optional[int] = None
     vnc_client_key_file_id: Optional[int] = None
@@ -589,7 +594,8 @@ class GroupIn(BaseModel):
 
 
 class FolderCredentialIn(BaseModel):
-    credential_id: int
+    credential_id: Optional[int] = None
+    remote_access_credential_id: Optional[int] = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -863,7 +869,8 @@ def delete_group(name: str):
 @app.get("/api/folder-credentials")
 def list_folder_credentials():
     with Session() as db:
-        return [{"path": r.path, "credential_id": r.credential_id}
+        return [{"path": r.path, "credential_id": r.credential_id,
+                 "remote_access_credential_id": r.remote_access_credential_id}
                 for r in db.query(FolderCredentialRow).all()]
 
 
@@ -871,12 +878,20 @@ def list_folder_credentials():
 def set_folder_credential(path: str, data: FolderCredentialIn):
     with Session() as db:
         row = db.query(FolderCredentialRow).filter_by(path=path).first()
+        if data.credential_id is None and data.remote_access_credential_id is None:
+            if row:
+                db.delete(row)
+                db.commit()
+            return {"path": path, "credential_id": None, "remote_access_credential_id": None}
         if row:
             row.credential_id = data.credential_id
+            row.remote_access_credential_id = data.remote_access_credential_id
         else:
-            db.add(FolderCredentialRow(path=path, credential_id=data.credential_id))
+            db.add(FolderCredentialRow(path=path, credential_id=data.credential_id,
+                                       remote_access_credential_id=data.remote_access_credential_id))
         db.commit()
-    return {"path": path, "credential_id": data.credential_id}
+    return {"path": path, "credential_id": data.credential_id,
+            "remote_access_credential_id": data.remote_access_credential_id}
 
 
 @app.delete("/api/folder-credentials/{path:path}", status_code=204)
