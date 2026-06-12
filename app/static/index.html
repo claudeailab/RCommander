@@ -265,13 +265,8 @@
   .an-bg46{background:#56d4dd}.an-bg47{background:#c9d1d9}
   .terminal-placeholder { color: var(--muted); font-style: italic; margin: auto; text-align: center; }
   .ra-server-row { display:flex; align-items:center; gap:6px; }
-  .ra-server-name { font-size:13px; font-weight:500; flex:1; min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ra-server-btns { display:flex; gap:4px; flex-wrap:wrap; margin-left:auto; }
-  @media (max-width: 600px) {
-    .ra-server-row { flex-direction:column; align-items:flex-start; gap:5px; }
-    .ra-server-name { min-width:0; width:100%; }
-    .ra-server-btns { margin-left:0; }
-  }
+  .ra-server-name { font-size:13px; font-weight:500; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ra-server-btns { display:flex; gap:4px; flex-wrap:wrap; margin-left:auto; flex-shrink:0; }
   .spinner {
     display: inline-block;
     width: 14px; height: 14px;
