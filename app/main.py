@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.54"
+APP_VERSION = "1.6.55"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1239,10 +1239,10 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
               f"hex={server_greeting.hex()}")
 
         if len(server_greeting) >= key_size:
-            # Server immediately sent the encrypted session key (pre-installed pubkey)
             encrypted_key = server_greeting[:key_size]
             dsm_leftover_enc = server_greeting[key_size:]
-            print(f"[VNC {label}] DSM: server sent key directly (pre-installed pubkey)")
+            print(f"[VNC {label}] DSM: server sent key directly (pre-installed pubkey), "
+                  f"leftover={len(dsm_leftover_enc)}B")
         else:
             # Parse greeting: [caps(4)][count(1)][sub_types(count)]
             sub_count = server_greeting[4] if len(server_greeting) >= 5 else 0
@@ -1267,16 +1267,12 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 print(f"[VNC {label}] DSM: server silent after sub-type — sending pubkey")
 
             if len(after_sub) >= key_size:
-                # UltraVNC SecureVNCPlugin2: server response has a 22-byte header
-                # before the 256-byte RSA-encrypted AES session key.
-                # Magic byte 0x50 ('P') identifies this header format.
-                dsm_header_size = 22 if (len(after_sub) > key_size and after_sub[0] == 0x50) else 0
-                encrypted_key = after_sub[dsm_header_size:dsm_header_size + key_size]
-                dsm_leftover_enc = after_sub[dsm_header_size + key_size:]
-                if dsm_header_size:
-                    print(f"[VNC {label}] DSM: 22-byte header detected, "
-                          f"leftover={len(dsm_leftover_enc)}B")
-                print(f"[VNC {label}] DSM: server sent encrypted key after sub-type")
+                # First key_size bytes ARE the RSA ciphertext; bytes that follow
+                # are AES-encrypted RFB stream data (SecurityResult + early frames).
+                encrypted_key = after_sub[:key_size]
+                dsm_leftover_enc = after_sub[key_size:]
+                print(f"[VNC {label}] DSM: server sent encrypted key after sub-type, "
+                      f"leftover={len(dsm_leftover_enc)}B")
             else:
                 # Send RSA public key as raw big-endian modulus (no DER/ASN.1 wrapper)
                 pub_nums = private_key.public_key().public_numbers()
