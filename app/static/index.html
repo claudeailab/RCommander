@@ -2821,6 +2821,8 @@ function _raServerRowHTML(s, depth) {
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         Command
       </button>
+      <button class="btn btn-ghost btn-sm" onclick="raSshConnect(${s.id})"
+        style="font-size:11px;padding:3px 9px;color:#3fb950;border-color:#3fb95044"${!hasCmdCred ? ' title="No Command Credentials configured"' : ''}>SSH</button>
       <button class="btn btn-ghost btn-sm" onclick="raConnect(${s.id},'vnc')"
         style="font-size:11px;padding:3px 9px;color:#58a6ff;border-color:#58a6ff44"${!hasRaCred ? ' title="No Remote Access Credentials configured"' : ''}>VNC</button>
       <button class="btn btn-ghost btn-sm" onclick="raConnect(${s.id},'rdp')"
@@ -2889,6 +2891,26 @@ function raSendCommand(serverId) {
       </button>
     </div>`;
   showModal('#ra-cmd-sel');
+}
+
+async function raSshConnect(serverId) {
+  const server = state.servers.find(s => s.id == serverId);
+  if (!server) return;
+  const effCred = getEffectiveCredential(server);
+  if (!effCred) {
+    toast(`No Command Credentials for "${escape(server.name)}" — configure them in Settings`, 'fail');
+    return;
+  }
+  try {
+    const res = await api('POST', '/api/ssh-session', {
+      server_id: server.id,
+      credential_id: effCred.id,
+      port: server.port || 22,
+    });
+    window.open(`/ssh/${res.token}`, '_blank');
+  } catch (e) {
+    toast(`SSH: ${e.message || e}`, 'fail');
+  }
 }
 
 function raUpdateCmdPreview() {
