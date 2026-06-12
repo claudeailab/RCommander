@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.21"
+APP_VERSION = "1.6.22"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1085,15 +1085,20 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
             print(f"[VNC {host_label}] ws_to_tcp ended: {e}")
 
     async def tcp_to_ws():
+        chunks = 0
         try:
             while True:
                 data = await reader.read(65536)
                 if not data:
-                    print(f"[VNC {host_label}] VNC server closed connection")
+                    print(f"[VNC {host_label}] VNC server closed after {chunks} chunks")
                     break
+                chunks += 1
+                if chunks <= 3:
+                    print(f"[VNC {host_label}] chunk #{chunks}: {len(data)} bytes: {data[:40]!r}")
                 try:
                     await websocket.send_bytes(data)
-                except Exception:
+                except Exception as e:
+                    print(f"[VNC {host_label}] send_bytes failed at chunk {chunks}: {e}")
                     break
         except Exception as e:
             print(f"[VNC {host_label}] tcp_to_ws ended: {e}")
