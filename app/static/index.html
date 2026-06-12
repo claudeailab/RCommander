@@ -297,10 +297,10 @@
     max-width: 480px;
     max-height: 90vh;
     overflow-y: auto;
-    padding: 24px;
+    padding: 18px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
   }
   .modal-header {
     display: flex;
@@ -1751,16 +1751,22 @@ function openModal(type, id = null, defaultGroup = '') {
           <input id="f-port" type="number" value="${src?.port ?? 22}" placeholder="22">
         </div>
       </div>
-      <div class="form-group">
-        <label>Type</label>
-        <select id="f-type" onchange="onTypeChange()">
-          <option value="ssh"   ${(!src||src.type==='ssh')  ?'selected':''}>SSH (Linux/Mac)</option>
-          <option value="winrm" ${src?.type==='winrm'       ?'selected':''}>WinRM (Windows)</option>
-        </select>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Type</label>
+          <select id="f-type" onchange="onTypeChange()">
+            <option value="ssh"   ${(!src||src.type==='ssh')  ?'selected':''}>SSH (Linux/Mac)</option>
+            <option value="winrm" ${src?.type==='winrm'       ?'selected':''}>WinRM (Windows)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input id="f-desc" value="${escape(src?.description ?? '')}" placeholder="Optional">
+        </div>
       </div>
       <div class="form-group">
         <label>Folder</label>
-        <div class="folder-tree" id="f-group-tree" style="max-height:220px">
+        <div class="folder-tree" id="f-group-tree" style="max-height:130px">
           <div class="folder-node f-none${!groupValue ? ' f-selected' : ''}" data-path="" style="padding-left:12px">(no folder)</div>
           ${folderPickerHTML(groupValue)}
         </div>
@@ -1789,10 +1795,6 @@ function openModal(type, id = null, defaultGroup = '') {
           ${['cmd','ssh','vnc','rdp'].map(t => `<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px"><input type="checkbox" id="f-ct-${t}" ${_ctChecked.includes(t)?'checked':''}> ${t.toUpperCase()}</label>`).join('')}
         </div>
         <div class="hint">${_ctHint}</div>
-      </div>
-      <div class="form-group">
-        <label>Description</label>
-        <input id="f-desc" value="${escape(src?.description ?? '')}" placeholder="Optional">
       </div>
       ${modalFooter('saveServer')}`;
   }
