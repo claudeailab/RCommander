@@ -3,6 +3,7 @@ import io
 import json
 import os
 import secrets
+import socket
 import time
 from typing import Literal, Optional
 
@@ -111,7 +112,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.28"
+APP_VERSION = "1.6.29"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -170,6 +171,8 @@ try {
   const rfb = new RFB(document.getElementById('t'), url, { credentials: { password: %%PW%% } });
   rfb.scaleViewport = true;
   rfb.resizeSession = true;
+  rfb.qualityLevel = 6;
+  rfb.compressionLevel = 2;
   rfb.addEventListener('connect', () => setStatus('Connected', '#3fb950'));
   rfb.addEventListener('disconnect', ev => {
     const reason = ev.detail.reason || '';
@@ -1061,6 +1064,9 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     try:
         reader, writer = await asyncio.open_connection(session["host"], session["port"])
+        sock = writer.transport.get_extra_info("socket")
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         print(f"[VNC {host_label}] TCP connected")
     except Exception as e:
         print(f"[VNC {host_label}] TCP connect failed: {e}")
@@ -1088,7 +1094,6 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
                     msgs += 1
                     print(f"[VNC {host_label}] ws→tcp text #{msgs}: {msg['text'][:50]!r}")
                     writer.write(msg["text"].encode())
-                await writer.drain()
         except Exception as e:
             print(f"[VNC {host_label}] ws_to_tcp ended: {e}")
 
