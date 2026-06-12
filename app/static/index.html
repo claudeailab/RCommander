@@ -1231,6 +1231,17 @@ function getEffectiveRemoteAccessCredential(server) {
   return null;
 }
 
+function getEffectiveConnectionTypes(server) {
+  if (server.connection_types) return { types: server.connection_types.split(','), inherited: false };
+  const parts = (server.server_group || '').split('/').filter(Boolean);
+  for (let i = parts.length; i > 0; i--) {
+    const path = parts.slice(0, i).join('/');
+    const fc = state.folderCredentials.find(f => f.path === path);
+    if (fc?.connection_types) return { types: fc.connection_types.split(','), inherited: true, from: path };
+  }
+  return null; // null = all types enabled
+}
+
 function renderServers() {
   const tbody = document.getElementById('servers-body');
   const q = (document.getElementById('server-filter')?.value ?? '').toLowerCase();
@@ -1719,6 +1730,13 @@ function openModal(type, id = null, defaultGroup = '') {
     const _raHint  = src?.remote_access_credential_id
       ? `Set directly on this server — select <em>— none —</em> to use the folder credential instead`
       : (_effRa?.inherited  ? `Inherited from folder <em>${escape(_effRa.from)}</em> — <strong>${escape(_raCredName)}</strong>`  : 'No credentials configured on this server or its folder');
+    const _effCt = src ? getEffectiveConnectionTypes(src) : null;
+    const _ctChecked = (src?.connection_types || '').split(',').filter(Boolean);
+    const _ctHint = src?.connection_types
+      ? `Set directly on this server — uncheck all to inherit from folder`
+      : (_effCt?.inherited
+          ? `Inherited from folder <em>${escape(_effCt.from)}</em> — <strong>${_effCt.types.map(t=>t.toUpperCase()).join(', ')}</strong>`
+          : 'No restriction set — all connection types are shown.');
     const title = s ? 'Edit Server' : (_cloneSource ? `Clone "${_cloneSource.name}"` : 'Add Server');
     modalBox.innerHTML = `
       ${modalHeader(title)}
@@ -1767,6 +1785,13 @@ function openModal(type, id = null, defaultGroup = '') {
           ${state.credentials.map(c => `<option value="${c.id}" ${src?.remote_access_credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
         </select>
         <div class="hint">${_raHint}</div>
+      </div>
+      <div class="form-group">
+        <label>Connection Types</label>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;padding:5px 0">
+          ${['cmd','ssh','vnc','rdp'].map(t => `<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px"><input type="checkbox" id="f-ct-${t}" ${_ctChecked.includes(t)?'checked':''}> ${t.toUpperCase()}</label>`).join('')}
+        </div>
+        <div class="hint">${_ctHint}</div>
       </div>
       <div class="form-group">
         <label>Description</label>
@@ -1897,10 +1922,12 @@ async function saveEntity(resource, label, body) {
 async function saveServer() {
   const credVal = document.getElementById('f-credential')?.value;
   const raCredVal = document.getElementById('f-ra-credential')?.value;
+  const ctTypes = ['cmd','ssh','vnc','rdp'].filter(t => document.getElementById(`f-ct-${t}`)?.checked);
   const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22,
     type: val('f-type'), description: val('f-desc'), server_group: val('f-group'),
     credential_id: credVal ? parseInt(credVal) : null,
-    remote_access_credential_id: raCredVal ? parseInt(raCredVal) : null };
+    remote_access_credential_id: raCredVal ? parseInt(raCredVal) : null,
+    connection_types: ctTypes.join(',') };
   if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
   await saveEntity('servers', 'Server', body);
 }
@@ -2200,6 +2227,13 @@ function openEditFolderModal(fullPath) {
       </select>
       <div class="hint">Saving will propagate this credential to all servers in this folder, overriding any server-level setting.</div>
     </div>
+    <div class="form-group">
+      <label>Connection Types</label>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;padding:5px 0">
+        ${['cmd','ssh','vnc','rdp'].map(t => `<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px"><input type="checkbox" id="f-fct-${t}" ${(fc?.connection_types||'').split(',').includes(t)?'checked':''}> ${t.toUpperCase()}</label>`).join('')}
+      </div>
+      <div class="hint">Saving will propagate this setting to all servers in this folder, overriding any server-level setting.</div>
+    </div>
     ${modalFooter('_saveEditFolder')}`;
 
   const tree = modalBox.querySelector('#f-edit-folder-tree');
@@ -2223,6 +2257,7 @@ async function _saveEditFolder() {
   const newPath = newParent ? newParent + '/' + newLeaf : newLeaf;
   const credId = document.getElementById('f-folder-cred')?.value;
   const raCredId = document.getElementById('f-folder-ra-cred')?.value;
+  const fctTypes = ['cmd','ssh','vnc','rdp'].filter(t => document.getElementById(`f-fct-${t}`)?.checked);
   try {
     if (newPath !== fullPath) {
       await api('PUT', '/api/groups/rename', { old_name: fullPath, new_name: newPath });
@@ -2230,6 +2265,7 @@ async function _saveEditFolder() {
     await api('PUT', `/api/folder-credentials/${newPath}`, {
       credential_id: credId ? +credId : null,
       remote_access_credential_id: raCredId ? +raCredId : null,
+      connection_types: fctTypes.join(',') || null,
     });
     closeModal(); await loadAll(); toast('Folder saved');
   } catch(e) { toast(e.message, 'fail'); }
@@ -2818,21 +2854,20 @@ function _raServerRowHTML(s, depth) {
   const pl = 8 + depth * 16;
   const hasCmdCred = !!getEffectiveCredential(s);
   const hasRaCred  = !!getEffectiveRemoteAccessCredential(s);
+  const effCt = getEffectiveConnectionTypes(s);
+  const show = effCt ? effCt.types : ['cmd','ssh','vnc','rdp'];
+  const btns = [
+    show.includes('cmd') ? `<button class="btn btn-ghost btn-sm" onclick="raSendCommand(${s.id})" style="font-size:11px;padding:3px 9px"${!hasCmdCred?' title="No Command Credentials configured"':''}>CMD</button>` : '',
+    show.includes('ssh') ? `<button class="btn btn-ghost btn-sm" onclick="raSshConnect(${s.id})" style="font-size:11px;padding:3px 9px;color:#3fb950;border-color:#3fb95044"${!hasCmdCred?' title="No Command Credentials configured"':''}>SSH</button>` : '',
+    show.includes('vnc') ? `<button class="btn btn-ghost btn-sm" onclick="raConnect(${s.id},'vnc')" style="font-size:11px;padding:3px 9px;color:#58a6ff;border-color:#58a6ff44"${!hasRaCred?' title="No Remote Access Credentials configured"':''}>VNC</button>` : '',
+    show.includes('rdp') ? `<button class="btn btn-ghost btn-sm" onclick="raConnect(${s.id},'rdp')" style="font-size:11px;padding:3px 9px;color:#a371f7;border-color:#a371f744"${!hasRaCred?' title="No Remote Access Credentials configured"':''}>RDP</button>` : '',
+  ].join('');
   return `<div style="padding:8px 10px 8px ${pl}px;border-top:1px solid var(--border);background:var(--bg2)" class="ra-server-row">
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" style="flex-shrink:0">
       <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
     </svg>
     <span class="ra-server-name" title="${escape(s.name)}">${escape(s.name)}</span>
-    <div class="ra-server-btns">
-      <button class="btn btn-ghost btn-sm" onclick="raSendCommand(${s.id})"
-        style="font-size:11px;padding:3px 9px"${!hasCmdCred ? ' title="No Command Credentials configured"' : ''}>CMD</button>
-      <button class="btn btn-ghost btn-sm" onclick="raSshConnect(${s.id})"
-        style="font-size:11px;padding:3px 9px;color:#3fb950;border-color:#3fb95044"${!hasCmdCred ? ' title="No Command Credentials configured"' : ''}>SSH</button>
-      <button class="btn btn-ghost btn-sm" onclick="raConnect(${s.id},'vnc')"
-        style="font-size:11px;padding:3px 9px;color:#58a6ff;border-color:#58a6ff44"${!hasRaCred ? ' title="No Remote Access Credentials configured"' : ''}>VNC</button>
-      <button class="btn btn-ghost btn-sm" onclick="raConnect(${s.id},'rdp')"
-        style="font-size:11px;padding:3px 9px;color:#a371f7;border-color:#a371f744"${!hasRaCred ? ' title="No Remote Access Credentials configured"' : ''}>RDP</button>
-    </div>
+    <div class="ra-server-btns">${btns}</div>
   </div>`;
 }
 

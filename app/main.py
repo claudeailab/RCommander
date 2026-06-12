@@ -39,6 +39,7 @@ class ServerRow(Base):
     server_group = Column(String, default="")
     vnc_dsm_file_id = Column(Integer, nullable=True)
     vnc_client_key_file_id = Column(Integer, nullable=True)
+    connection_types = Column(String, default="")
 
 
 class CredentialRow(Base):
@@ -73,6 +74,7 @@ class FolderCredentialRow(Base):
     path = Column(String, unique=True, nullable=False)
     credential_id = Column(Integer, nullable=True)
     remote_access_credential_id = Column(Integer, nullable=True)
+    connection_types = Column(String, default="")
 
 
 class VncFileRow(Base):
@@ -98,12 +100,14 @@ def _migrate():
                                ("remote_access_credential_id",    "INTEGER"),
                                ("server_group",                   "TEXT NOT NULL DEFAULT ''"),
                                ("vnc_dsm_file_id",                "INTEGER"),
-                               ("vnc_client_key_file_id",         "INTEGER")],
+                               ("vnc_client_key_file_id",         "INTEGER"),
+                               ("connection_types",               "TEXT NOT NULL DEFAULT ''")],
         "credentials":        [("description",   "TEXT NOT NULL DEFAULT ''")],
         "commands":           [("description",   "TEXT NOT NULL DEFAULT ''"),
                                ("server_id",     "INTEGER"),
                                ("shell_type",    "TEXT NOT NULL DEFAULT 'cmd'")],
-        "folder_credentials": [("remote_access_credential_id",    "INTEGER")],
+        "folder_credentials": [("remote_access_credential_id",    "INTEGER"),
+                               ("connection_types",               "TEXT NOT NULL DEFAULT ''")],
     }
     with engine.connect() as conn:
         for table, columns in migrations.items():
@@ -116,7 +120,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.42"
+APP_VERSION = "1.6.43"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -559,6 +563,7 @@ class ServerIn(BaseModel):
     server_group: str = ""
     vnc_dsm_file_id: Optional[int] = None
     vnc_client_key_file_id: Optional[int] = None
+    connection_types: str = ""
 
 
 class CredentialIn(BaseModel):
@@ -596,6 +601,7 @@ class GroupIn(BaseModel):
 class FolderCredentialIn(BaseModel):
     credential_id: Optional[int] = None
     remote_access_credential_id: Optional[int] = None
+    connection_types: Optional[str] = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -870,27 +876,31 @@ def delete_group(name: str):
 def list_folder_credentials():
     with Session() as db:
         return [{"path": r.path, "credential_id": r.credential_id,
-                 "remote_access_credential_id": r.remote_access_credential_id}
+                 "remote_access_credential_id": r.remote_access_credential_id,
+                 "connection_types": r.connection_types or ""}
                 for r in db.query(FolderCredentialRow).all()]
 
 
 @app.put("/api/folder-credentials/{path:path}", status_code=200)
 def set_folder_credential(path: str, data: FolderCredentialIn):
+    ct = data.connection_types or ""
     with Session() as db:
         row = db.query(FolderCredentialRow).filter_by(path=path).first()
-        if data.credential_id is None and data.remote_access_credential_id is None:
+        if data.credential_id is None and data.remote_access_credential_id is None and not ct:
             if row:
                 db.delete(row)
                 db.commit()
-            return {"path": path, "credential_id": None, "remote_access_credential_id": None}
+            return {"path": path, "credential_id": None, "remote_access_credential_id": None, "connection_types": ""}
         if row:
             row.credential_id = data.credential_id
             row.remote_access_credential_id = data.remote_access_credential_id
+            row.connection_types = ct
         else:
             db.add(FolderCredentialRow(path=path, credential_id=data.credential_id,
-                                       remote_access_credential_id=data.remote_access_credential_id))
+                                       remote_access_credential_id=data.remote_access_credential_id,
+                                       connection_types=ct))
         # Force-propagate: clear server-level overrides so every server in this
-        # folder (and sub-folders) inherits the folder credential.
+        # folder (and sub-folders) inherits the folder settings.
         servers = db.query(ServerRow).all()
         for server in servers:
             sg = server.server_group or ""
@@ -899,9 +909,12 @@ def set_folder_credential(path: str, data: FolderCredentialIn):
                     server.credential_id = None
                 if data.remote_access_credential_id is not None:
                     server.remote_access_credential_id = None
+                if ct:
+                    server.connection_types = ""
         db.commit()
     return {"path": path, "credential_id": data.credential_id,
-            "remote_access_credential_id": data.remote_access_credential_id}
+            "remote_access_credential_id": data.remote_access_credential_id,
+            "connection_types": ct}
 
 
 @app.delete("/api/folder-credentials/{path:path}", status_code=204)
