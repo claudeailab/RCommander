@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.58"
+APP_VERSION = "1.6.59"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1256,8 +1256,10 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             # 0x72 = server uses client's pre-configured public key to encrypt AES key
             # 0x73 = server sends its own public key, client generates+encrypts AES key
             # Prefer 0x72 when we have a client private key; otherwise fall back to 0x73.
-            if 0x72 in sub_types:
-                chosen = 0x72
+            # Prefer 0x73 (server sends its RSA pubkey → client sends encrypted AES key).
+            # 0x72 = server uses pre-configured client pubkey to encrypt AES key (path A).
+            if 0x73 in sub_types:
+                chosen = 0x73
             elif sub_types:
                 chosen = sub_types[0]
             else:
@@ -1358,11 +1360,10 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             server_pub = RSAPublicNumbers(e=65537, n=server_n).public_key()
             aes_key = os.urandom(16)
             encrypted_session = server_pub.encrypt(aes_key, asym_padding.PKCS1v15())
-            writer.write(b"\x01")
             writer.write(encrypted_session)
             await writer.drain()
-            print(f"[VNC {label}] DSM: sent ACK + {len(encrypted_session)}B encrypted session key, "
-                  f"our AES key={aes_key.hex()}")
+            print(f"[VNC {label}] DSM: sent {len(encrypted_session)}B encrypted session key "
+                  f"(no ACK prefix), our AES key={aes_key.hex()}")
             iv = bytes(16)
             enc_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).encryptor()
             dec_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
