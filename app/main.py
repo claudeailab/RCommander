@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.49"
+APP_VERSION = "1.6.50"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1215,25 +1215,52 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         selected = 17
         writer.write(bytes([17]))
         await writer.drain()
-        # UltraVNC DSM key exchange: server sends RSA-encrypted AES-128 key
+
         with open(client_key_path, "rb") as f:
             key_data = f.read()
         private_key = _load_rsa_private_key(key_data)
         if private_key is None:
             raise ValueError("Cannot load RSA private key")
         key_size = (private_key.key_size + 7) // 8
-        print(f"[VNC {label}] DSM: RSA-{private_key.key_size}, reading {key_size}B")
-        encrypted_key = await asyncio.wait_for(reader.readexactly(key_size), timeout=10.0)
+
+        # Check if server sends the encrypted key immediately (pre-installed pubkey)
+        # or if it expects us to send our public key first
+        try:
+            server_first = await asyncio.wait_for(reader.read(key_size), timeout=2.0)
+        except asyncio.TimeoutError:
+            server_first = b""
+
+        if server_first:
+            print(f"[VNC {label}] Type-17: server sent {len(server_first)}B first: {server_first[:8].hex()}")
+
+        if len(server_first) >= key_size:
+            # Server already has our pubkey installed and sent the encrypted session key
+            encrypted_key = server_first[:key_size]
+        else:
+            # Server is waiting for our public key — send it (SubjectPublicKeyInfo DER)
+            pub_der = private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo)
+            writer.write(len(pub_der).to_bytes(4, "big") + pub_der)
+            await writer.drain()
+            print(f"[VNC {label}] DSM: sent public key ({len(pub_der)}B), waiting for session key")
+            try:
+                rest = await asyncio.wait_for(reader.readexactly(key_size - len(server_first)), timeout=10.0)
+            except asyncio.TimeoutError:
+                raise ValueError("DSM: server did not send session key after receiving public key")
+            encrypted_key = server_first + rest
+
+        print(f"[VNC {label}] DSM: decrypting {len(encrypted_key)}B session key")
         aes_key = None
         for pad in [asym_padding.PKCS1v15(),
                     asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
                                       algorithm=hashes.SHA1(), label=None)]:
             try:
                 aes_key = private_key.decrypt(encrypted_key, pad)
-                print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__})")
+                print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__}, {len(aes_key)}B raw)")
                 break
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[VNC {label}] {type(pad).__name__} failed: {e}")
         if not aes_key:
             raise ValueError("DSM: RSA decrypt failed for all padding types")
         aes_key = (aes_key + bytes(16))[:16]
