@@ -1237,6 +1237,28 @@ function getEffectiveConnectionTypes(server) {
   return null; // null = all types enabled
 }
 
+function getEffectiveVncDsm(server) {
+  if (server.vnc_dsm_file_id) return { id: server.vnc_dsm_file_id, inherited: false };
+  const parts = (server.server_group || '').split('/').filter(Boolean);
+  for (let i = parts.length; i > 0; i--) {
+    const path = parts.slice(0, i).join('/');
+    const fc = state.folderCredentials.find(f => f.path === path);
+    if (fc?.vnc_dsm_file_id) return { id: fc.vnc_dsm_file_id, inherited: true, from: path };
+  }
+  return null;
+}
+
+function getEffectiveVncClientKey(server) {
+  if (server.vnc_client_key_file_id) return { id: server.vnc_client_key_file_id, inherited: false };
+  const parts = (server.server_group || '').split('/').filter(Boolean);
+  for (let i = parts.length; i > 0; i--) {
+    const path = parts.slice(0, i).join('/');
+    const fc = state.folderCredentials.find(f => f.path === path);
+    if (fc?.vnc_client_key_file_id) return { id: fc.vnc_client_key_file_id, inherited: true, from: path };
+  }
+  return null;
+}
+
 function renderServers() {
   const tbody = document.getElementById('servers-body');
   const q = (document.getElementById('server-filter')?.value ?? '').toLowerCase();
@@ -1734,6 +1756,16 @@ function openModal(type, id = null, defaultGroup = '') {
       : (_effCt?.inherited
           ? `Inherited from folder <em>${escape(_effCt.from)}</em> — <strong>${_effCt.types.map(t=>t.toUpperCase()).join(', ')}</strong>`
           : 'No restriction set — all connection types are shown.');
+    const _effVncDsm = src ? getEffectiveVncDsm(src) : null;
+    const _effVncKey = src ? getEffectiveVncClientKey(src) : null;
+    const _dsmFileName = state.vncFiles.find(f=>f.id===_effVncDsm?.id)?.name || '';
+    const _keyFileName = state.vncFiles.find(f=>f.id===_effVncKey?.id)?.name || '';
+    const _dsmPlaceholder = _effVncDsm?.inherited ? `Inherited: ${escape(_dsmFileName)} (from ${escape(_effVncDsm.from)})` : '— none —';
+    const _keyPlaceholder = _effVncKey?.inherited ? `Inherited: ${escape(_keyFileName)} (from ${escape(_effVncKey.from)})` : '— none —';
+    const _dsmHint = src?.vnc_dsm_file_id ? `Set directly on this server`
+      : (_effVncDsm?.inherited ? `Inherited from folder <em>${escape(_effVncDsm.from)}</em> — <strong>${escape(_dsmFileName)}</strong>` : 'No DSM plugin configured');
+    const _keyHint = src?.vnc_client_key_file_id ? `Set directly on this server`
+      : (_effVncKey?.inherited ? `Inherited from folder <em>${escape(_effVncKey.from)}</em> — <strong>${escape(_keyFileName)}</strong>` : 'No client key configured');
     const title = s ? 'Edit Server' : (_cloneSource ? `Clone "${_cloneSource.name}"` : 'Add Server');
     modalBox.innerHTML = `
       ${modalHeader(title)}
@@ -1796,6 +1828,27 @@ function openModal(type, id = null, defaultGroup = '') {
         </div>
         <div class="hint">${_ctHint}</div>
       </div>
+      ${state.vncFiles.length ? `<div class="form-group">
+        <label>UltraVNC Plugin</label>
+        <div class="form-row">
+          <div class="form-group">
+            <label style="font-size:11px;color:var(--muted)">DSM Plugin File</label>
+            <select id="f-vnc-dsm">
+              <option value="">${_dsmPlaceholder}</option>
+              ${state.vncFiles.filter(f=>f.file_type==='dsm').map(f=>`<option value="${f.id}" ${src?.vnc_dsm_file_id===f.id?'selected':''}>${escape(f.name)}</option>`).join('')}
+            </select>
+            <div class="hint">${_dsmHint}</div>
+          </div>
+          <div class="form-group">
+            <label style="font-size:11px;color:var(--muted)">Client Key (.pkey)</label>
+            <select id="f-vnc-key">
+              <option value="">${_keyPlaceholder}</option>
+              ${state.vncFiles.filter(f=>f.file_type==='client_key').map(f=>`<option value="${f.id}" ${src?.vnc_client_key_file_id===f.id?'selected':''}>${escape(f.name)}</option>`).join('')}
+            </select>
+            <div class="hint">${_keyHint}</div>
+          </div>
+        </div>
+      </div>` : ''}
       ${modalFooter('saveServer')}`;
   }
 
@@ -1922,11 +1975,15 @@ async function saveServer() {
   const credVal = document.getElementById('f-credential')?.value;
   const raCredVal = document.getElementById('f-ra-credential')?.value;
   const ctTypes = ['cmd','ssh','vnc','rdp'].filter(t => document.getElementById(`f-ct-${t}`)?.checked);
+  const vncDsmVal = document.getElementById('f-vnc-dsm')?.value;
+  const vncKeyVal = document.getElementById('f-vnc-key')?.value;
   const body = { name: val('f-name'), host: val('f-host'), port: parseInt(val('f-port')) || 22,
     type: val('f-type'), description: val('f-desc'), server_group: val('f-group'),
     credential_id: credVal ? parseInt(credVal) : null,
     remote_access_credential_id: raCredVal ? parseInt(raCredVal) : null,
-    connection_types: ctTypes.join(',') };
+    connection_types: ctTypes.join(','),
+    vnc_dsm_file_id: vncDsmVal ? parseInt(vncDsmVal) : null,
+    vnc_client_key_file_id: vncKeyVal ? parseInt(vncKeyVal) : null };
   if (!body.name || !body.host) { toast('Name and Host are required', 'fail'); return; }
   await saveEntity('servers', 'Server', body);
 }
@@ -2233,6 +2290,26 @@ function openEditFolderModal(fullPath) {
       </div>
       <div class="hint">Saving will propagate this setting to all servers in this folder, overriding any server-level setting.</div>
     </div>
+    ${state.vncFiles.length ? `<div class="form-group">
+      <label>UltraVNC Plugin</label>
+      <div class="form-row">
+        <div class="form-group">
+          <label style="font-size:11px;color:var(--muted)">DSM Plugin File</label>
+          <select id="f-folder-vnc-dsm">
+            <option value="">— none —</option>
+            ${state.vncFiles.filter(f=>f.file_type==='dsm').map(f=>`<option value="${f.id}" ${fc?.vnc_dsm_file_id===f.id?'selected':''}>${escape(f.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label style="font-size:11px;color:var(--muted)">Client Key (.pkey)</label>
+          <select id="f-folder-vnc-key">
+            <option value="">— none —</option>
+            ${state.vncFiles.filter(f=>f.file_type==='client_key').map(f=>`<option value="${f.id}" ${fc?.vnc_client_key_file_id===f.id?'selected':''}>${escape(f.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="hint">Saving will propagate these files to all servers in this folder.</div>
+    </div>` : ''}
     ${modalFooter('_saveEditFolder')}`;
 
   const tree = modalBox.querySelector('#f-edit-folder-tree');
@@ -2257,6 +2334,8 @@ async function _saveEditFolder() {
   const credId = document.getElementById('f-folder-cred')?.value;
   const raCredId = document.getElementById('f-folder-ra-cred')?.value;
   const fctTypes = ['cmd','ssh','vnc','rdp'].filter(t => document.getElementById(`f-fct-${t}`)?.checked);
+  const folderVncDsm = document.getElementById('f-folder-vnc-dsm')?.value;
+  const folderVncKey = document.getElementById('f-folder-vnc-key')?.value;
   try {
     if (newPath !== fullPath) {
       await api('PUT', '/api/groups/rename', { old_name: fullPath, new_name: newPath });
@@ -2265,6 +2344,8 @@ async function _saveEditFolder() {
       credential_id: credId ? +credId : null,
       remote_access_credential_id: raCredId ? +raCredId : null,
       connection_types: fctTypes.join(',') || null,
+      vnc_dsm_file_id: folderVncDsm ? +folderVncDsm : null,
+      vnc_client_key_file_id: folderVncKey ? +folderVncKey : null,
     });
     closeModal(); await loadAll(); toast('Folder saved');
   } catch(e) { toast(e.message, 'fail'); }
@@ -2874,7 +2955,8 @@ async function raConnect(serverId, protocol) {
   const server = state.servers.find(s => s.id == serverId);
   if (!server) return;
   const effCred = getEffectiveRemoteAccessCredential(server);
-  if (!effCred) {
+  const hasDsmKey = !!getEffectiveVncClientKey(server);
+  if (!effCred && !(protocol === 'vnc' && hasDsmKey)) {
     toast(`No Remote Access Credentials for "${escape(server.name)}" — configure them in Settings`, 'fail');
     return;
   }
@@ -2882,7 +2964,7 @@ async function raConnect(serverId, protocol) {
   try {
     let win;
     if (protocol === 'vnc') {
-      const data = await api('POST', '/api/vnc-session', { server_id: server.id, credential_id: effCred.id, port: 5900 });
+      const data = await api('POST', '/api/vnc-session', { server_id: server.id, credential_id: effCred?.id || null, port: 5900 });
       win = window.open('/vnc/' + data.token, '_blank');
     } else if (protocol === 'rdp') {
       const [w, h] = _getRdpResolution(rdpDef);

@@ -9,6 +9,9 @@ from typing import Literal, Optional
 
 import paramiko
 import winrm
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -75,6 +78,8 @@ class FolderCredentialRow(Base):
     credential_id = Column(Integer, nullable=True)
     remote_access_credential_id = Column(Integer, nullable=True)
     connection_types = Column(String, default="")
+    vnc_dsm_file_id = Column(Integer, nullable=True)
+    vnc_client_key_file_id = Column(Integer, nullable=True)
 
 
 class VncFileRow(Base):
@@ -107,7 +112,9 @@ def _migrate():
                                ("server_id",     "INTEGER"),
                                ("shell_type",    "TEXT NOT NULL DEFAULT 'cmd'")],
         "folder_credentials": [("remote_access_credential_id",    "INTEGER"),
-                               ("connection_types",               "TEXT NOT NULL DEFAULT ''")],
+                               ("connection_types",               "TEXT NOT NULL DEFAULT ''"),
+                               ("vnc_dsm_file_id",                "INTEGER"),
+                               ("vnc_client_key_file_id",         "INTEGER")],
     }
     with engine.connect() as conn:
         for table, columns in migrations.items():
@@ -120,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.46"
+APP_VERSION = "1.6.47"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -602,6 +609,8 @@ class FolderCredentialIn(BaseModel):
     credential_id: Optional[int] = None
     remote_access_credential_id: Optional[int] = None
     connection_types: Optional[str] = None
+    vnc_dsm_file_id: Optional[int] = None
+    vnc_client_key_file_id: Optional[int] = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -877,7 +886,9 @@ def list_folder_credentials():
     with Session() as db:
         return [{"path": r.path, "credential_id": r.credential_id,
                  "remote_access_credential_id": r.remote_access_credential_id,
-                 "connection_types": r.connection_types or ""}
+                 "connection_types": r.connection_types or "",
+                 "vnc_dsm_file_id": r.vnc_dsm_file_id,
+                 "vnc_client_key_file_id": r.vnc_client_key_file_id}
                 for r in db.query(FolderCredentialRow).all()]
 
 
@@ -886,23 +897,34 @@ def set_folder_credential(path: str, data: FolderCredentialIn):
     ct = data.connection_types or ""
     with Session() as db:
         row = db.query(FolderCredentialRow).filter_by(path=path).first()
-        if data.credential_id is None and data.remote_access_credential_id is None and not ct:
+        nothing_set = (
+            data.credential_id is None and
+            data.remote_access_credential_id is None and
+            not ct and
+            data.vnc_dsm_file_id is None and
+            data.vnc_client_key_file_id is None
+        )
+        if nothing_set:
             if row:
                 db.delete(row)
                 db.commit()
-            return {"path": path, "credential_id": None, "remote_access_credential_id": None, "connection_types": ""}
+            return {"path": path, "credential_id": None, "remote_access_credential_id": None,
+                    "connection_types": "", "vnc_dsm_file_id": None, "vnc_client_key_file_id": None}
         if row:
             row.credential_id = data.credential_id
             row.remote_access_credential_id = data.remote_access_credential_id
             row.connection_types = ct
+            row.vnc_dsm_file_id = data.vnc_dsm_file_id
+            row.vnc_client_key_file_id = data.vnc_client_key_file_id
         else:
             db.add(FolderCredentialRow(path=path, credential_id=data.credential_id,
                                        remote_access_credential_id=data.remote_access_credential_id,
-                                       connection_types=ct))
+                                       connection_types=ct,
+                                       vnc_dsm_file_id=data.vnc_dsm_file_id,
+                                       vnc_client_key_file_id=data.vnc_client_key_file_id))
         # Force-propagate: clear server-level overrides so every server in this
         # folder (and sub-folders) inherits the folder settings.
-        servers = db.query(ServerRow).all()
-        for server in servers:
+        for server in db.query(ServerRow).all():
             sg = server.server_group or ""
             if sg == path or sg.startswith(path + "/"):
                 if data.credential_id is not None:
@@ -911,10 +933,16 @@ def set_folder_credential(path: str, data: FolderCredentialIn):
                     server.remote_access_credential_id = None
                 if ct:
                     server.connection_types = ""
+                if data.vnc_dsm_file_id is not None:
+                    server.vnc_dsm_file_id = None
+                if data.vnc_client_key_file_id is not None:
+                    server.vnc_client_key_file_id = None
         db.commit()
     return {"path": path, "credential_id": data.credential_id,
             "remote_access_credential_id": data.remote_access_credential_id,
-            "connection_types": ct}
+            "connection_types": ct,
+            "vnc_dsm_file_id": data.vnc_dsm_file_id,
+            "vnc_client_key_file_id": data.vnc_client_key_file_id}
 
 
 @app.delete("/api/folder-credentials/{path:path}", status_code=204)
@@ -1034,7 +1062,7 @@ def execute(req: ExecuteRequest):
 
 class VncSessionIn(BaseModel):
     server_id: int
-    credential_id: int
+    credential_id: Optional[int] = None
     port: int = 5900
 
 
@@ -1062,21 +1090,42 @@ class RdpSessionIn(BaseModel):
     dpi: int = 96
 
 
+def _get_effective_vnc_client_key(server: "ServerRow", db) -> Optional[int]:
+    if server.vnc_client_key_file_id:
+        return server.vnc_client_key_file_id
+    if server.server_group:
+        parts = server.server_group.split("/")
+        for i in range(len(parts), 0, -1):
+            path = "/".join(parts[:i])
+            fc = db.query(FolderCredentialRow).filter_by(path=path).first()
+            if fc and fc.vnc_client_key_file_id:
+                return fc.vnc_client_key_file_id
+    return None
+
+
 @app.post("/api/vnc-session")
 def create_vnc_session(data: VncSessionIn):
     _prune_vnc_sessions()
     with Session() as db:
         server = db.get(ServerRow, data.server_id)
-        cred = db.get(CredentialRow, data.credential_id)
-        if not server or not cred:
-            raise HTTPException(404, "Server or credential not found")
+        if not server:
+            raise HTTPException(404, "Server not found")
+        cred = db.get(CredentialRow, data.credential_id) if data.credential_id else None
+        # Resolve effective VNC client key for DSM
+        client_key_id = _get_effective_vnc_client_key(server, db)
+        client_key_path = None
+        if client_key_id:
+            p = os.path.join(VNC_FILES_DIR, f"{client_key_id}.bin")
+            if os.path.exists(p):
+                client_key_path = p
         token = secrets.token_urlsafe(16)
         _vnc_sessions[token] = {
             "host": server.host,
             "port": data.port,
-            "password": cred.password or "",
+            "password": cred.password or "" if cred else "",
             "name": server.name,
             "ts": time.time(),
+            "client_key_path": client_key_path,
         }
     return {"token": token}
 
@@ -1089,6 +1138,63 @@ def vnc_session_page(token: str):
     return HTMLResponse(_vnc_page(token, session["name"], session["password"]))
 
 
+def _load_rsa_private_key(key_data: bytes):
+    for loader in [serialization.load_pem_private_key, serialization.load_der_private_key]:
+        try:
+            return loader(key_data, password=None)
+        except Exception:
+            pass
+    return None
+
+
+async def _dsm_handshake(reader, writer, key_path: str, label: str = ""):
+    """
+    SecureVNCPlugin2 handshake (UltraVNC).
+    After TCP connect and before any RFB data:
+      1. Server sends RSA-encrypted AES-128 session key (key_size_bytes long)
+      2. We decrypt with our RSA private key (.pkey file)
+      3. We send 1-byte ack (0x01)
+      4. All subsequent data is AES-128-OFB encrypted with zero IV
+    Returns (encryptor, decryptor) or (None, None) on failure.
+    """
+    try:
+        with open(key_path, "rb") as f:
+            key_data = f.read()
+        private_key = _load_rsa_private_key(key_data)
+        if private_key is None:
+            print(f"[DSM {label}] Cannot load RSA private key from {key_path}")
+            return None, None
+        key_size = (private_key.key_size + 7) // 8
+        print(f"[DSM {label}] RSA-{private_key.key_size}, expecting {key_size}-byte server packet")
+        encrypted = await asyncio.wait_for(reader.readexactly(key_size), timeout=10.0)
+        aes_key = None
+        for pad in [asym_padding.PKCS1v15(),
+                    asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
+                                      algorithm=hashes.SHA1(), label=None)]:
+            try:
+                aes_key = private_key.decrypt(encrypted, pad)
+                print(f"[DSM {label}] Decrypted {len(aes_key)}B key with {type(pad).__name__}")
+                break
+            except Exception as e:
+                print(f"[DSM {label}] {type(pad).__name__} failed: {e}")
+        if not aes_key:
+            return None, None
+        aes_key = (aes_key + bytes(16))[:16]  # AES-128 = 16 bytes
+        writer.write(b"\x01")
+        await writer.drain()
+        print(f"[DSM {label}] Handshake OK — key {aes_key.hex()}")
+        iv = bytes(16)
+        enc = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
+        dec = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
+        return enc, dec
+    except asyncio.TimeoutError:
+        print(f"[DSM {label}] Timeout — server did not send DSM handshake")
+        return None, None
+    except Exception as e:
+        print(f"[DSM {label}] Handshake error: {e}")
+        return None, None
+
+
 @app.websocket("/ws/vnc/{token}")
 async def vnc_ws_proxy(websocket: WebSocket, token: str):
     session = _vnc_sessions.pop(token, None)
@@ -1097,6 +1203,7 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         return
 
     host_label = f"{session['host']}:{session['port']}"
+    client_key_path = session.get("client_key_path")
 
     await websocket.accept()
 
@@ -1114,25 +1221,34 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
             pass
         return
 
+    enc_ctx = dec_ctx = None
+    if client_key_path:
+        print(f"[VNC {host_label}] DSM key configured, running handshake")
+        enc_ctx, dec_ctx = await _dsm_handshake(reader, writer, client_key_path, host_label)
+        if enc_ctx is None:
+            print(f"[VNC {host_label}] DSM handshake failed — closing")
+            writer.close()
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+            return
+
     async def ws_to_tcp():
         msgs = 0
         try:
             while True:
                 msg = await websocket.receive()
                 if msg.get("type") == "websocket.disconnect":
-                    print(f"[VNC {host_label}] client disconnected (code {msg.get('code', '?')}) after {msgs} ws msgs")
+                    print(f"[VNC {host_label}] client disconnected after {msgs} msgs")
                     break
-                if "bytes" in msg:
+                data = msg.get("bytes") or (msg.get("text", "").encode() if "text" in msg else None)
+                if data:
                     msgs += 1
-                    data = msg["bytes"]
-                    if msgs <= 3:
-                        print(f"[VNC {host_label}] ws→tcp #{msgs}: {len(data)} bytes: {data[:20]!r}")
+                    if enc_ctx:
+                        data = enc_ctx.update(data)
                     writer.write(data)
-                elif "text" in msg:
-                    msgs += 1
-                    print(f"[VNC {host_label}] ws→tcp text #{msgs}: {msg['text'][:50]!r}")
-                    writer.write(msg["text"].encode())
-                await writer.drain()
+                    await writer.drain()
         except Exception as e:
             print(f"[VNC {host_label}] ws_to_tcp ended: {e}")
 
@@ -1142,17 +1258,15 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
             while True:
                 data = await reader.read(65536)
                 if not data:
-                    print(f"[VNC {host_label}] VNC server closed after {chunks} chunks")
+                    print(f"[VNC {host_label}] server closed after {chunks} chunks")
                     break
                 chunks += 1
-                if chunks <= 3:
-                    print(f"[VNC {host_label}] chunk #{chunks}: {len(data)} bytes: {data[:40]!r}")
+                if dec_ctx:
+                    data = dec_ctx.update(data)
                 try:
                     await websocket.send_bytes(data)
-                    if chunks <= 3:
-                        print(f"[VNC {host_label}] chunk #{chunks} sent ok")
                 except Exception as e:
-                    print(f"[VNC {host_label}] send_bytes failed at chunk {chunks}: {e}")
+                    print(f"[VNC {host_label}] send_bytes failed: {e}")
                     break
         except Exception as e:
             print(f"[VNC {host_label}] tcp_to_ws ended: {e}")
