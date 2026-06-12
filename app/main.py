@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.51"
+APP_VERSION = "1.6.52"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1223,59 +1223,63 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             raise ValueError("Cannot load RSA private key")
         key_size = (private_key.key_size + 7) // 8
 
-        # Read server's type-17 greeting (capabilities + sub-type list)
-        # e.g. [ff ff ff ff][02][73 72] = capabilities(4) + count(1) + subtypes[n]
-        # We may receive multiple chunks; drain up to ~64B within 2s
-        server_greeting = b""
-        deadline = asyncio.get_event_loop().time() + 2.0
-        while asyncio.get_event_loop().time() < deadline:
-            try:
-                chunk = await asyncio.wait_for(
-                    reader.read(4096), timeout=deadline - asyncio.get_event_loop().time())
-                if not chunk:
-                    break
-                server_greeting += chunk
-                if len(server_greeting) >= key_size:
-                    break   # got full encrypted key already
-                # if it looks like a greeting (not key_size bytes), stop reading
-                if len(server_greeting) < key_size and len(chunk) < key_size:
-                    break
-            except asyncio.TimeoutError:
-                break
-
+        # Read server's type-17 greeting (usually 7 bytes in practice):
+        # [nonce/caps(4)] [sub_count(1)] [sub_types(N)]
+        try:
+            server_greeting = await asyncio.wait_for(reader.read(512), timeout=2.0)
+        except asyncio.TimeoutError:
+            server_greeting = b""
         print(f"[VNC {label}] Type-17 greeting: {len(server_greeting)}B "
               f"hex={server_greeting.hex()}")
 
         if len(server_greeting) >= key_size:
-            # Server already sent the encrypted session key (pre-installed pubkey variant)
+            # Server immediately sent the encrypted session key (pre-installed pubkey)
             encrypted_key = server_greeting[:key_size]
-            print(f"[VNC {label}] DSM: server sent key directly")
+            print(f"[VNC {label}] DSM: server sent key directly (pre-installed pubkey)")
         else:
-            # Server is waiting for our public key.
-            # Try PKCS#1 DER first (raw RSA key, no AlgorithmIdentifier wrapper),
-            # then SubjectPublicKeyInfo if the first attempt is rejected.
-            pub_pkcs1 = private_key.public_key().public_bytes(
-                encoding=serialization.Encoding.DER,
-                format=serialization.PublicFormat.PKCS1)
-            # Send without a length prefix — raw DER
-            writer.write(pub_pkcs1)
+            # Greeting was a sub-type negotiation message.
+            # Parse: [caps(4)] [count(1)] [sub_types(count)]
+            # Respond with 1-byte sub-type selection.
+            # 0x73 = first offered sub-type (DSM plugin); 0x00 = "use DSM default"
+            sub_count = server_greeting[4] if len(server_greeting) >= 5 else 0
+            sub_types = list(server_greeting[5:5 + sub_count]) if sub_count else []
+            chosen = sub_types[0] if sub_types else 0x00
+            writer.write(bytes([chosen]))
             await writer.drain()
-            print(f"[VNC {label}] DSM: sent PKCS1 pub key ({len(pub_pkcs1)}B, no prefix), "
-                  f"waiting for {key_size}B encrypted session key")
+            print(f"[VNC {label}] DSM: sent sub-type 0x{chosen:02x}, "
+                  f"reading server response before sending pubkey")
 
-            # Read server's encrypted session key
-            enc_buf = b""
+            # Read any server reply after sub-type selection (challenge or prompt)
             try:
-                enc_buf = await asyncio.wait_for(reader.read(key_size * 2), timeout=5.0)
-                print(f"[VNC {label}] DSM: server replied {len(enc_buf)}B: "
-                      f"hex={enc_buf[:16].hex()}")
+                after_sub = await asyncio.wait_for(reader.read(key_size * 2), timeout=2.0)
+                print(f"[VNC {label}] DSM: after sub-type, server sent "
+                      f"{len(after_sub)}B hex={after_sub.hex()}")
             except asyncio.TimeoutError:
-                print(f"[VNC {label}] DSM: no response after PKCS1 key — connection dead?")
-                raise ValueError("DSM: server did not respond after receiving public key")
+                after_sub = b""
+                print(f"[VNC {label}] DSM: server silent after sub-type")
 
-            if len(enc_buf) < key_size:
-                raise ValueError(f"DSM: expected {key_size}B encrypted key, got {len(enc_buf)}B")
-            encrypted_key = enc_buf[:key_size]
+            if len(after_sub) >= key_size:
+                encrypted_key = after_sub[:key_size]
+                print(f"[VNC {label}] DSM: using server's post-sub-type data as encrypted key")
+            else:
+                # Send our RSA public key as raw big-endian modulus (no DER/ASN.1 wrapper)
+                pub_nums = private_key.public_key().public_numbers()
+                raw_modulus = pub_nums.n.to_bytes(key_size, "big")
+                writer.write(raw_modulus)
+                await writer.drain()
+                print(f"[VNC {label}] DSM: sent raw modulus ({len(raw_modulus)}B), "
+                      f"waiting for {key_size}B encrypted session key")
+
+                try:
+                    enc_buf = await asyncio.wait_for(reader.read(key_size * 2), timeout=5.0)
+                    print(f"[VNC {label}] DSM: server replied {len(enc_buf)}B "
+                          f"hex={enc_buf[:16].hex()}")
+                except asyncio.TimeoutError:
+                    raise ValueError("DSM: server did not respond after receiving public key")
+
+                if len(enc_buf) < key_size:
+                    raise ValueError(f"DSM: expected {key_size}B, got {len(enc_buf)}B")
+                encrypted_key = enc_buf[:key_size]
 
         print(f"[VNC {label}] DSM: decrypting {len(encrypted_key)}B session key")
         aes_key = None
