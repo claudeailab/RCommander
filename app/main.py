@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.53"
+APP_VERSION = "1.6.54"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1200,7 +1200,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             await writer.drain()
         # RFB 3.3 has no SecurityResult
         print(f"[VNC {label}] Auth type {selected} (RFB 3.3)")
-        return enc_ctx, dec_ctx
+        return enc_ctx, dec_ctx, b""
 
     # RFB 3.7 / 3.8 — client selects from list
     num = (await asyncio.wait_for(reader.readexactly(1), timeout=5.0))[0]
@@ -1241,6 +1241,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         if len(server_greeting) >= key_size:
             # Server immediately sent the encrypted session key (pre-installed pubkey)
             encrypted_key = server_greeting[:key_size]
+            dsm_leftover_enc = server_greeting[key_size:]
             print(f"[VNC {label}] DSM: server sent key directly (pre-installed pubkey)")
         else:
             # Parse greeting: [caps(4)][count(1)][sub_types(count)]
@@ -1254,6 +1255,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             await writer.drain()
             print(f"[VNC {label}] DSM: sent sub-type 0x{chosen:02x}")
 
+            dsm_leftover_enc = b""
+
             # Read any server reply after sub-type selection (may be empty)
             try:
                 after_sub = await asyncio.wait_for(reader.read(key_size * 2), timeout=1.0)
@@ -1264,7 +1267,15 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 print(f"[VNC {label}] DSM: server silent after sub-type — sending pubkey")
 
             if len(after_sub) >= key_size:
-                encrypted_key = after_sub[:key_size]
+                # UltraVNC SecureVNCPlugin2: server response has a 22-byte header
+                # before the 256-byte RSA-encrypted AES session key.
+                # Magic byte 0x50 ('P') identifies this header format.
+                dsm_header_size = 22 if (len(after_sub) > key_size and after_sub[0] == 0x50) else 0
+                encrypted_key = after_sub[dsm_header_size:dsm_header_size + key_size]
+                dsm_leftover_enc = after_sub[dsm_header_size + key_size:]
+                if dsm_header_size:
+                    print(f"[VNC {label}] DSM: 22-byte header detected, "
+                          f"leftover={len(dsm_leftover_enc)}B")
                 print(f"[VNC {label}] DSM: server sent encrypted key after sub-type")
             else:
                 # Send RSA public key as raw big-endian modulus (no DER/ASN.1 wrapper)
@@ -1285,6 +1296,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 if len(enc_buf) < key_size:
                     raise ValueError(f"DSM: expected {key_size}B, got {len(enc_buf)}B")
                 encrypted_key = enc_buf[:key_size]
+                dsm_leftover_enc = enc_buf[key_size:]
 
         print(f"[VNC {label}] DSM: decrypting {len(encrypted_key)}B session key")
         aes_key = None
@@ -1306,6 +1318,22 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         enc_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
         dec_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
         print(f"[VNC {label}] DSM AES-128-OFB active, key={aes_key.hex()}")
+
+        # Decrypt any bytes already received (SecurityResult is buried in there)
+        dsm_pre_buf = b""
+        if dsm_leftover_enc:
+            dec_leftover = dec_ctx.update(dsm_leftover_enc)
+            print(f"[VNC {label}] DSM: leftover decrypted {len(dec_leftover)}B "
+                  f"hex={dec_leftover.hex()}")
+            if len(dec_leftover) >= 4:
+                sec_result = int.from_bytes(dec_leftover[:4], "big")
+                if sec_result != 0:
+                    raise ValueError(f"DSM SecurityResult failure: {sec_result}")
+                print(f"[VNC {label}] DSM Auth OK (from leftover)")
+                dsm_pre_buf = dec_leftover[4:]  # remaining bytes belong to RFB stream
+            else:
+                dsm_pre_buf = dec_leftover  # not enough for SecurityResult yet; relay will handle
+        return enc_ctx, dec_ctx, dsm_pre_buf
     elif 1 in types:
         selected = 1
         writer.write(bytes([1]))
@@ -1321,6 +1349,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         raise ValueError(f"No supported security type in {types}")
 
     # SecurityResult: RFB 3.8 always; RFB 3.7 only for non-None types
+    # (type-17/DSM already returned above after consuming SecurityResult from leftover)
     if srv_minor >= 8 or (srv_minor == 7 and selected != 1):
         raw = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
         if dec_ctx:
@@ -1340,7 +1369,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             raise ValueError(f"SecurityResult failure: {msg}")
         print(f"[VNC {label}] Auth OK (type {selected})")
 
-    return enc_ctx, dec_ctx
+    return enc_ctx, dec_ctx, b""
 
 
 async def _client_rfb_handshake(websocket, label: str):
@@ -1394,7 +1423,7 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     # Phase 1: full RFB handshake with the real VNC server
     try:
-        enc_ctx, dec_ctx = await _server_rfb_handshake(
+        enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
             reader, writer, client_key_path, password, host_label)
     except Exception as e:
         print(f"[VNC {host_label}] Server handshake failed: {e}")
@@ -1439,6 +1468,10 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     async def tcp_to_ws():
         chunks = 0
         try:
+            if srv_pre_buf:
+                print(f"[VNC {host_label}] forwarding {len(srv_pre_buf)}B pre-buffered RFB data")
+                await websocket.send_bytes(srv_pre_buf)
+                chunks += 1
             while True:
                 data = await reader.read(65536)
                 if not data:
