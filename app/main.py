@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.26"
+APP_VERSION = "1.6.27"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -149,6 +149,7 @@ body { background: #000; display: flex; flex-direction: column; height: 100vh; f
   </svg>
   VNC — %%NAME%%
   <span id="status" style="color:#8b949e">Loading…</span>
+  <button id="cad-btn" style="background:none;border:1px solid #444;color:#ccc;border-radius:5px;padding:3px 10px;font-size:12px;cursor:pointer" onclick="window._vncCad && window._vncCad()" title="Send Ctrl+Alt+Del">Ctrl+Alt+Del</button>
   <button id="disc-btn" onclick="window._vncDisconnect && window._vncDisconnect()">Disconnect</button>
 </div>
 <div id="vnc"><div id="t"></div></div>
@@ -182,6 +183,7 @@ try {
     setStatus('Auth failed: ' + (ev.detail.reason || ev.detail.status), '#f85149');
     console.error('[VNC] securityfailure', ev.detail);
   });
+  window._vncCad = function() { try { rfb.sendCtrlAltDel(); } catch(_) {} };
   window._vncDisconnect = function() { try { rfb.disconnect(); } catch(_) {} window.close(); };
 } catch(e) {
   setStatus('Failed to load: ' + e.message, '#f85149');
