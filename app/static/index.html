@@ -1697,12 +1697,20 @@ function openModal(type, id = null, defaultGroup = '') {
     const groupValue = src?.server_group ?? defaultGroup;
     const _effCmd = src ? getEffectiveCredential(src) : null;
     const _effRa  = src ? getEffectiveRemoteAccessCredential(src) : null;
+    const _cmdCredName = state.credentials.find(c=>c.id===_effCmd?.id)?.name || '';
+    const _raCredName  = state.credentials.find(c=>c.id===_effRa?.id)?.name  || '';
     const _cmdPlaceholder = _effCmd?.inherited
-      ? `↑ Inherited: ${escape(state.credentials.find(c=>c.id===_effCmd.id)?.name||'')} (from ${escape(_effCmd.from)})`
-      : '— none —';
+      ? `↑ Inherited: ${escape(_cmdCredName)} (from ${escape(_effCmd.from)})`
+      : '— none (select to set, or leave blank to inherit from folder) —';
     const _raPlaceholder  = _effRa?.inherited
-      ? `↑ Inherited: ${escape(state.credentials.find(c=>c.id===_effRa.id)?.name||'')} (from ${escape(_effRa.from)})`
-      : '— none —';
+      ? `↑ Inherited: ${escape(_raCredName)} (from ${escape(_effRa.from)})`
+      : '— none (select to set, or leave blank to inherit from folder) —';
+    const _cmdHint = src?.credential_id
+      ? `Set directly on this server — select <em>— none —</em> to inherit from folder instead`
+      : (_effCmd?.inherited ? `↑ Inheriting <strong>${escape(_cmdCredName)}</strong> from folder <em>${escape(_effCmd.from)}</em>` : 'No credentials configured on this server or its folder');
+    const _raHint  = src?.remote_access_credential_id
+      ? `Set directly on this server — select <em>— none —</em> to inherit from folder instead`
+      : (_effRa?.inherited  ? `↑ Inheriting <strong>${escape(_raCredName)}</strong> from folder <em>${escape(_effRa.from)}</em>`  : 'No credentials configured on this server or its folder');
     const title = s ? 'Edit Server' : (_cloneSource ? `Clone "${_cloneSource.name}"` : 'Add Server');
     modalBox.innerHTML = `
       ${modalHeader(title)}
@@ -1742,7 +1750,7 @@ function openModal(type, id = null, defaultGroup = '') {
           <option value="">${_cmdPlaceholder}</option>
           ${state.credentials.map(c => `<option value="${c.id}" ${src?.credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
         </select>
-        <div class="hint">Used for SSH/WinRM command execution</div>
+        <div class="hint">${_cmdHint}</div>
       </div>
       <div class="form-group">
         <label>Remote Access Credentials</label>
@@ -1750,7 +1758,7 @@ function openModal(type, id = null, defaultGroup = '') {
           <option value="">${_raPlaceholder}</option>
           ${state.credentials.map(c => `<option value="${c.id}" ${src?.remote_access_credential_id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}
         </select>
-        <div class="hint">Used for remote access (VNC/RDP)</div>
+        <div class="hint">${_raHint}</div>
       </div>
       <div class="form-group">
         <label>Description</label>
