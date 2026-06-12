@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     guacd \
     libguac-client-rdp0 \
     libguac-client-ssh0 \
-    novnc \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3.12 -m venv /venv
@@ -27,9 +27,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ .
 
-# Copy noVNC web assets from the apt package into static/
-RUN cp -r /usr/share/novnc/core /app/static/novnc-core \
-    && ([ -d /usr/share/novnc/vendor ] && cp -r /usr/share/novnc/vendor /app/static/vendor || true)
+# noVNC 1.5.0 from GitHub — removes the strict binary subprotocol check
+# that caused immediate disconnect when reverse proxies strip Sec-WebSocket-Protocol
+RUN wget -qO /tmp/novnc.tgz https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz \
+    && tar -xzf /tmp/novnc.tgz -C /tmp \
+    && mkdir -p /app/static/novnc-core \
+    && cp -r /tmp/noVNC-1.5.0/core/* /app/static/novnc-core/ \
+    && ([ -d /tmp/noVNC-1.5.0/vendor ] && cp -r /tmp/noVNC-1.5.0/vendor /app/static/vendor || true) \
+    && rm -rf /tmp/novnc.tgz /tmp/noVNC-1.5.0
 
 RUN mkdir -p /data
 
