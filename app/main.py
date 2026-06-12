@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.25"
+APP_VERSION = "1.6.26"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1055,8 +1055,7 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     host_label = f"{session['host']}:{session['port']}"
 
-    # noVNC negotiates "binary" or "base64"; accept "binary"
-    await websocket.accept(subprotocol="binary")
+    await websocket.accept()
 
     try:
         reader, writer = await asyncio.open_connection(session["host"], session["port"])
