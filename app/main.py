@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.48"
+APP_VERSION = "1.6.49"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1147,79 +1147,159 @@ def _load_rsa_private_key(key_data: bytes):
     return None
 
 
-async def _dsm_handshake(reader, writer, key_path: str, label: str = ""):
-    """
-    SecureVNCPlugin2 handshake (UltraVNC) — adaptive protocol detection.
-    Returns (initial_bytes, enc_ctx, dec_ctx).
-    initial_bytes: any server data read before encryption begins (must be forwarded to client).
-    enc_ctx/dec_ctx: AES-128-OFB contexts, or None if DSM was not established.
-    """
+def _vnc_des_response(password: str, challenge: bytes) -> bytes:
+    """VNC DES challenge-response: bit-reversed key bytes, ECB mode."""
+    import warnings
     try:
-        with open(key_path, "rb") as f:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            from cryptography.hazmat.primitives.ciphers.algorithms import DES as _DES
+        key = (password.encode("latin-1") + b"\x00" * 8)[:8]
+        key = bytes(int(f"{b:08b}"[::-1], 2) for b in key)
+        enc = Cipher(_DES(key), modes.ECB()).encryptor()
+        return enc.update(challenge[:16]) + enc.finalize()
+    except Exception as e:
+        print(f"[VNC] DES unavailable ({e}) — VNC auth will fail")
+        return b"\x00" * 16
+
+
+async def _server_rfb_handshake(reader, writer, client_key_path: str,
+                                 password: str, label: str):
+    """
+    Full server-side RFB handshake.  Handles version exchange, security type
+    selection (type 17 UltraVNC-DSM, type 1 None, type 2 VNC-auth) and reads
+    the SecurityResult.  Returns (enc_ctx, dec_ctx) — both None for plain sessions.
+    Raises ValueError on any failure that should abort the connection.
+    """
+    # --- version exchange ---
+    sv = await asyncio.wait_for(reader.readexactly(12), timeout=10.0)
+    if not sv.startswith(b"RFB "):
+        raise ValueError(f"Expected RFB banner, got {sv!r}")
+    try:
+        srv_minor = int(sv[8:11])
+    except Exception:
+        srv_minor = 3
+    writer.write(b"RFB 003.008\n")
+    await writer.drain()
+    print(f"[VNC {label}] Server RFB {sv[4:11].decode()}")
+
+    enc_ctx = dec_ctx = None
+    selected = 0
+
+    if srv_minor <= 3:
+        # RFB 3.3 — server chooses security type
+        sec_data = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
+        selected = int.from_bytes(sec_data, "big")
+        if selected == 0:
+            rlen = int.from_bytes(await reader.readexactly(4), "big")
+            reason = (await reader.readexactly(rlen)).decode(errors="replace")
+            raise ValueError(f"Server refused: {reason}")
+        if selected == 2:
+            challenge = await asyncio.wait_for(reader.readexactly(16), timeout=5.0)
+            writer.write(_vnc_des_response(password, challenge))
+            await writer.drain()
+        # RFB 3.3 has no SecurityResult
+        print(f"[VNC {label}] Auth type {selected} (RFB 3.3)")
+        return enc_ctx, dec_ctx
+
+    # RFB 3.7 / 3.8 — client selects from list
+    num = (await asyncio.wait_for(reader.readexactly(1), timeout=5.0))[0]
+    if num == 0:
+        rlen = int.from_bytes(await reader.readexactly(4), "big")
+        reason = (await reader.readexactly(rlen)).decode(errors="replace")
+        raise ValueError(f"Server refused: {reason}")
+    types = list(await asyncio.wait_for(reader.readexactly(num), timeout=5.0))
+    print(f"[VNC {label}] Security types offered: {types}")
+
+    if 17 in types and client_key_path:
+        selected = 17
+        writer.write(bytes([17]))
+        await writer.drain()
+        # UltraVNC DSM key exchange: server sends RSA-encrypted AES-128 key
+        with open(client_key_path, "rb") as f:
             key_data = f.read()
         private_key = _load_rsa_private_key(key_data)
         if private_key is None:
-            print(f"[DSM {label}] Cannot load RSA private key from {key_path}")
-            return b"", None, None
+            raise ValueError("Cannot load RSA private key")
         key_size = (private_key.key_size + 7) // 8
-        print(f"[DSM {label}] RSA-{private_key.key_size}, reading up to {key_size}B from server")
-
-        # Read initial data — use read() not readexactly() to avoid blocking
-        try:
-            initial = await asyncio.wait_for(reader.read(key_size), timeout=5.0)
-        except asyncio.TimeoutError:
-            # Server sent nothing; try client-initiated probe then give up
-            print(f"[DSM {label}] Server silent after 5s — falling through without DSM")
-            return b"", None, None
-
-        if not initial:
-            print(f"[DSM {label}] Server closed connection before handshake")
-            return b"", None, None
-
-        # Plain RFB banner ("RFB x.y\n") → no DSM on this connection
-        if initial[:4] == b"RFB ":
-            print(f"[DSM {label}] Server sent RFB banner ({len(initial)}B) — no DSM encryption")
-            return initial, None, None
-
-        # If we have fewer bytes than expected, try reading the rest
-        if 0 < len(initial) < key_size:
-            try:
-                rest = await asyncio.wait_for(
-                    reader.readexactly(key_size - len(initial)), timeout=3.0)
-                initial += rest
-            except (asyncio.TimeoutError, asyncio.IncompleteReadError) as e:
-                print(f"[DSM {label}] Partial read ({len(initial)}/{key_size}B): {e} — forwarding plain")
-                return initial, None, None
-
-        # Attempt RSA decryption of the session key
+        print(f"[VNC {label}] DSM: RSA-{private_key.key_size}, reading {key_size}B")
+        encrypted_key = await asyncio.wait_for(reader.readexactly(key_size), timeout=10.0)
         aes_key = None
         for pad in [asym_padding.PKCS1v15(),
                     asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
                                       algorithm=hashes.SHA1(), label=None)]:
             try:
-                aes_key = private_key.decrypt(initial[:key_size], pad)
-                print(f"[DSM {label}] Decrypted {len(aes_key)}B key with {type(pad).__name__}")
+                aes_key = private_key.decrypt(encrypted_key, pad)
+                print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__})")
                 break
-            except Exception as e:
-                print(f"[DSM {label}] {type(pad).__name__} failed: {e}")
-
+            except Exception:
+                pass
         if not aes_key:
-            # Decryption failed — forward what we read as plain data
-            print(f"[DSM {label}] RSA decrypt failed — forwarding {len(initial)}B as plain")
-            return initial, None, None
-
-        aes_key = (aes_key + bytes(16))[:16]  # truncate/pad to 16 bytes (AES-128)
-        writer.write(b"\x01")
+            raise ValueError("DSM: RSA decrypt failed for all padding types")
+        aes_key = (aes_key + bytes(16))[:16]
+        writer.write(b"\x01")          # ACK — encryption starts after this
         await writer.drain()
-        print(f"[DSM {label}] Handshake OK — AES key {aes_key.hex()}")
         iv = bytes(16)
-        enc = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
-        dec = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
-        return b"", enc, dec
+        enc_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
+        dec_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
+        print(f"[VNC {label}] DSM AES-128-OFB active, key={aes_key.hex()}")
+    elif 1 in types:
+        selected = 1
+        writer.write(bytes([1]))
+        await writer.drain()
+    elif 2 in types:
+        selected = 2
+        writer.write(bytes([2]))
+        await writer.drain()
+        challenge = await asyncio.wait_for(reader.readexactly(16), timeout=5.0)
+        writer.write(_vnc_des_response(password, challenge))
+        await writer.drain()
+    else:
+        raise ValueError(f"No supported security type in {types}")
 
-    except Exception as e:
-        print(f"[DSM {label}] Handshake error: {e}")
-        return b"", None, None
+    # SecurityResult: RFB 3.8 always; RFB 3.7 only for non-None types
+    if srv_minor >= 8 or (srv_minor == 7 and selected != 1):
+        raw = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
+        if dec_ctx:
+            raw = dec_ctx.update(raw)
+        result = int.from_bytes(raw, "big")
+        if result != 0:
+            msg = "Authentication failed"
+            if srv_minor >= 8:
+                rlen_raw = await reader.readexactly(4)
+                if dec_ctx:
+                    rlen_raw = dec_ctx.update(rlen_raw)
+                rlen = int.from_bytes(rlen_raw, "big")
+                reason_raw = await reader.readexactly(rlen)
+                if dec_ctx:
+                    reason_raw = dec_ctx.update(reason_raw)
+                msg = reason_raw.decode(errors="replace")
+            raise ValueError(f"SecurityResult failure: {msg}")
+        print(f"[VNC {label}] Auth OK (type {selected})")
+
+    return enc_ctx, dec_ctx
+
+
+async def _client_rfb_handshake(websocket, label: str):
+    """
+    Server-side of the RFB handshake toward noVNC.
+    We present RFB 3.8 with security type 1 (None) — the session token is
+    the real authentication gate.  Raises on timeout or disconnect.
+    """
+    await websocket.send_bytes(b"RFB 003.008\n")
+    msg = await asyncio.wait_for(websocket.receive(), timeout=10.0)
+    if msg.get("type") == "websocket.disconnect":
+        raise ValueError("noVNC disconnected during version exchange")
+    cv = msg.get("bytes") or msg.get("text", "").encode()
+    print(f"[VNC {label}] noVNC version: {cv[:11]}")
+    # Send security type list: count=1, type=1 (None)
+    await websocket.send_bytes(bytes([1, 1]))
+    msg = await asyncio.wait_for(websocket.receive(), timeout=5.0)
+    if msg.get("type") == "websocket.disconnect":
+        raise ValueError("noVNC disconnected during security negotiation")
+    # Send SecurityResult = OK
+    await websocket.send_bytes(b"\x00\x00\x00\x00")
+    print(f"[VNC {label}] noVNC handshake complete")
 
 
 @app.websocket("/ws/vnc/{token}")
@@ -1231,6 +1311,7 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     host_label = f"{session['host']}:{session['port']}"
     client_key_path = session.get("client_key_path")
+    password = session.get("password", "") or ""
 
     await websocket.accept()
 
@@ -1248,14 +1329,32 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
             pass
         return
 
-    initial_bytes = b""
-    enc_ctx = dec_ctx = None
-    if client_key_path:
-        print(f"[VNC {host_label}] DSM key configured, running handshake")
-        initial_bytes, enc_ctx, dec_ctx = await _dsm_handshake(reader, writer, client_key_path, host_label)
-        if enc_ctx is None:
-            print(f"[VNC {host_label}] DSM not established — proxying as plain VNC")
+    # Phase 1: full RFB handshake with the real VNC server
+    try:
+        enc_ctx, dec_ctx = await _server_rfb_handshake(
+            reader, writer, client_key_path, password, host_label)
+    except Exception as e:
+        print(f"[VNC {host_label}] Server handshake failed: {e}")
+        writer.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
 
+    # Phase 2: simplified RFB handshake toward noVNC
+    try:
+        await _client_rfb_handshake(websocket, host_label)
+    except Exception as e:
+        print(f"[VNC {host_label}] Client handshake failed: {e}")
+        writer.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    # Phase 3: bidirectional relay (decrypt from server, encrypt to server)
     async def ws_to_tcp():
         msgs = 0
         try:
@@ -1277,11 +1376,6 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     async def tcp_to_ws():
         chunks = 0
         try:
-            # Forward any bytes read during handshake detection
-            if initial_bytes:
-                data = dec_ctx.update(initial_bytes) if dec_ctx else initial_bytes
-                await websocket.send_bytes(data)
-                chunks += 1
             while True:
                 data = await reader.read(65536)
                 if not data:
