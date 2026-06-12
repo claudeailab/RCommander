@@ -116,7 +116,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.35"
+APP_VERSION = "1.6.36"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -889,6 +889,16 @@ def set_folder_credential(path: str, data: FolderCredentialIn):
         else:
             db.add(FolderCredentialRow(path=path, credential_id=data.credential_id,
                                        remote_access_credential_id=data.remote_access_credential_id))
+        # Force-propagate: clear server-level overrides so every server in this
+        # folder (and sub-folders) inherits the folder credential.
+        servers = db.query(ServerRow).all()
+        for server in servers:
+            sg = server.server_group or ""
+            if sg == path or sg.startswith(path + "/"):
+                if data.credential_id is not None:
+                    server.credential_id = None
+                if data.remote_access_credential_id is not None:
+                    server.remote_access_credential_id = None
         db.commit()
     return {"path": path, "credential_id": data.credential_id,
             "remote_access_credential_id": data.remote_access_credential_id}

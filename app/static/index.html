@@ -1272,7 +1272,7 @@ function renderServers() {
     const effCred = eff ? credMap.get(eff.id) : null;
     const credCell = effCred
       ? (eff.inherited
-          ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px;opacity:.7;border-style:dashed" title="Inherited from folder: ${escape(eff.from)}">${escape(effCred.name)} ↑</span>`
+          ? `<span class="badge badge-key" style="font-size:10px;padding:1px 5px;opacity:.7;border-style:dashed" title="Propagated from folder: ${escape(eff.from)}">${escape(effCred.name)} ↑</span>`
           : `<span class="badge badge-key" style="font-size:10px;padding:1px 5px">${escape(effCred.name)}</span>`)
       : '<span style="color:var(--muted);font-size:12px">—</span>';
     const nameStyle = depth > 0 ? ` style="padding-left:${indent + depth * indent}px"` : '';
@@ -1700,17 +1700,17 @@ function openModal(type, id = null, defaultGroup = '') {
     const _cmdCredName = state.credentials.find(c=>c.id===_effCmd?.id)?.name || '';
     const _raCredName  = state.credentials.find(c=>c.id===_effRa?.id)?.name  || '';
     const _cmdPlaceholder = _effCmd?.inherited
-      ? `↑ Inherited: ${escape(_cmdCredName)} (from ${escape(_effCmd.from)})`
+      ? `↑ Propagated from folder: ${escape(_cmdCredName)} (from ${escape(_effCmd.from)})`
       : '— none (select to set, or leave blank to inherit from folder) —';
     const _raPlaceholder  = _effRa?.inherited
-      ? `↑ Inherited: ${escape(_raCredName)} (from ${escape(_effRa.from)})`
+      ? `↑ Propagated from folder: ${escape(_raCredName)} (from ${escape(_effRa.from)})`
       : '— none (select to set, or leave blank to inherit from folder) —';
     const _cmdHint = src?.credential_id
-      ? `Set directly on this server — select <em>— none —</em> to inherit from folder instead`
-      : (_effCmd?.inherited ? `↑ Inheriting <strong>${escape(_cmdCredName)}</strong> from folder <em>${escape(_effCmd.from)}</em>` : 'No credentials configured on this server or its folder');
+      ? `Set directly on this server — select <em>— none —</em> to use the folder credential instead`
+      : (_effCmd?.inherited ? `↑ Propagated from folder <em>${escape(_effCmd.from)}</em> — <strong>${escape(_cmdCredName)}</strong>` : 'No credentials configured on this server or its folder');
     const _raHint  = src?.remote_access_credential_id
-      ? `Set directly on this server — select <em>— none —</em> to inherit from folder instead`
-      : (_effRa?.inherited  ? `↑ Inheriting <strong>${escape(_raCredName)}</strong> from folder <em>${escape(_effRa.from)}</em>`  : 'No credentials configured on this server or its folder');
+      ? `Set directly on this server — select <em>— none —</em> to use the folder credential instead`
+      : (_effRa?.inherited  ? `↑ Propagated from folder <em>${escape(_effRa.from)}</em> — <strong>${escape(_raCredName)}</strong>`  : 'No credentials configured on this server or its folder');
     const title = s ? 'Edit Server' : (_cloneSource ? `Clone "${_cloneSource.name}"` : 'Add Server');
     modalBox.innerHTML = `
       ${modalHeader(title)}
@@ -2182,7 +2182,7 @@ function openEditFolderModal(fullPath) {
         <option value="">— none —</option>
         ${state.credentials.map(c => `<option value="${c.id}" ${fc?.credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('')}
       </select>
-      <div class="hint">Inherited by servers in this folder for command execution.</div>
+      <div class="hint">Saving will propagate this credential to all servers in this folder, overriding any server-level setting.</div>
     </div>
     <div class="form-group">
       <label>Remote Access Credentials</label>
@@ -2190,7 +2190,7 @@ function openEditFolderModal(fullPath) {
         <option value="">— none —</option>
         ${state.credentials.map(c => `<option value="${c.id}" ${fc?.remote_access_credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('')}
       </select>
-      <div class="hint">Inherited by servers in this folder for VNC and RDP.</div>
+      <div class="hint">Saving will propagate this credential to all servers in this folder, overriding any server-level setting.</div>
     </div>
     ${modalFooter('_saveEditFolder')}`;
 
