@@ -127,7 +127,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.56"
+APP_VERSION = "1.6.57"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1314,31 +1314,60 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 break
             except Exception as e:
                 print(f"[VNC {label}] {type(pad).__name__} failed: {e}")
-        if not aes_key:
-            raise ValueError("DSM: RSA decrypt failed for all padding types")
-        aes_key = (aes_key + bytes(16))[:16]
-        writer.write(b"\x01")          # ACK — encryption starts after this
-        await writer.drain()
-        iv = bytes(16)
-        enc_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
-        dec_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
-        print(f"[VNC {label}] DSM AES-128-OFB active, key={aes_key.hex()}")
 
-        # Decrypt any bytes already received (SecurityResult is buried in there)
-        dsm_pre_buf = b""
-        if dsm_leftover_enc:
-            dec_leftover = dec_ctx.update(dsm_leftover_enc)
-            print(f"[VNC {label}] DSM: leftover decrypted {len(dec_leftover)}B "
-                  f"hex={dec_leftover.hex()}")
-            if len(dec_leftover) >= 4:
-                sec_result = int.from_bytes(dec_leftover[:4], "big")
-                if sec_result != 0:
-                    raise ValueError(f"DSM SecurityResult failure: {sec_result}")
-                print(f"[VNC {label}] DSM Auth OK (from leftover)")
-                dsm_pre_buf = dec_leftover[4:]  # remaining bytes belong to RFB stream
-            else:
-                dsm_pre_buf = dec_leftover  # not enough for SecurityResult yet; relay will handle
-        return enc_ctx, dec_ctx, dsm_pre_buf
+        if aes_key:
+            # Path A: server encrypted AES key with our public key (client-key mode).
+            aes_key = (aes_key + bytes(16))[:16]
+            writer.write(b"\x01")
+            await writer.drain()
+            iv = bytes(16)
+            enc_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
+            dec_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
+            print(f"[VNC {label}] DSM AES-128-OFB active (client-key mode), key={aes_key.hex()}")
+            dsm_pre_buf = b""
+            if dsm_leftover_enc:
+                dec_leftover = dec_ctx.update(dsm_leftover_enc)
+                print(f"[VNC {label}] DSM: leftover decrypted {len(dec_leftover)}B "
+                      f"hex={dec_leftover.hex()}")
+                if len(dec_leftover) >= 4:
+                    sec_result = int.from_bytes(dec_leftover[:4], "big")
+                    if sec_result != 0:
+                        raise ValueError(f"DSM SecurityResult failure: {sec_result}")
+                    print(f"[VNC {label}] DSM Auth OK (from leftover)")
+                    dsm_pre_buf = dec_leftover[4:]
+                else:
+                    dsm_pre_buf = dec_leftover
+            return enc_ctx, dec_ctx, dsm_pre_buf
+        else:
+            # Path B: bytes 22-277 are the SERVER's RSA public key modulus.
+            # Generate a random AES session key, RSA-encrypt it with server's pubkey,
+            # and send [ACK(1B)][encrypted_key(256B)] back.  Server decrypts and both
+            # sides use our randomly-generated AES key for the stream.
+            print(f"[VNC {label}] DSM: decrypt failed — trying server-pubkey mode")
+            from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+            server_n = int.from_bytes(encrypted_key, "big")
+            server_pub = RSAPublicNumbers(e=65537, n=server_n).public_key()
+            aes_key = os.urandom(16)
+            encrypted_session = server_pub.encrypt(aes_key, asym_padding.PKCS1v15())
+            writer.write(b"\x01")
+            writer.write(encrypted_session)
+            await writer.drain()
+            print(f"[VNC {label}] DSM: sent ACK + {len(encrypted_session)}B encrypted session key, "
+                  f"our AES key={aes_key.hex()}")
+            iv = bytes(16)
+            enc_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).encryptor()
+            dec_ctx = Cipher(algorithms.AES(aes_key), modes.OFB(iv)).decryptor()
+            # leftover bytes were sent by server BEFORE it knew our AES key →
+            # they cannot be encrypted with the session key; discard them.
+            print(f"[VNC {label}] DSM: discarding {len(dsm_leftover_enc)}B pre-exchange data")
+            # Read SecurityResult from network (server sends it after decrypting our key)
+            raw = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
+            dec_raw = dec_ctx.update(raw)
+            result = int.from_bytes(dec_raw, "big")
+            if result != 0:
+                raise ValueError(f"DSM SecurityResult failure (server-pubkey mode): {result}")
+            print(f"[VNC {label}] DSM Auth OK (server-pubkey mode)")
+            return enc_ctx, dec_ctx, b""
     elif 1 in types:
         selected = 1
         writer.write(bytes([1]))
