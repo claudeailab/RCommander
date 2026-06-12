@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.23"
+APP_VERSION = "1.6.24"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1108,6 +1108,8 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
                     print(f"[VNC {host_label}] chunk #{chunks}: {len(data)} bytes: {data[:40]!r}")
                 try:
                     await websocket.send_bytes(data)
+                    if chunks <= 3:
+                        print(f"[VNC {host_label}] chunk #{chunks} sent ok")
                 except Exception as e:
                     print(f"[VNC {host_label}] send_bytes failed at chunk {chunks}: {e}")
                     break
