@@ -111,7 +111,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.27"
+APP_VERSION = "1.6.28"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -136,8 +136,8 @@ body { background: #000; display: flex; flex-direction: column; height: 100vh; f
 #status { margin-left: auto; font-size: 12px; }
 #disc-btn { background:none; border:1px solid #da3633; color:#da3633; border-radius:5px; padding:3px 12px; font-size:12px; cursor:pointer; font-weight:600; }
 #disc-btn:hover { background:rgba(218,54,51,.15); }
-#vnc { flex: 1; overflow: hidden; }
-#vnc > div, #vnc canvas { width: 100% !important; height: 100% !important; }
+#vnc { flex: 1; overflow: hidden; position: relative; }
+#vnc > div { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
@@ -1096,11 +1096,7 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         chunks = 0
         try:
             while True:
-                try:
-                    data = await asyncio.wait_for(reader.read(65536), timeout=10.0)
-                except asyncio.TimeoutError:
-                    print(f"[VNC {host_label}] VNC server timeout — no data after 10s (chunk {chunks+1})")
-                    break
+                data = await reader.read(65536)
                 if not data:
                     print(f"[VNC {host_label}] VNC server closed after {chunks} chunks")
                     break
