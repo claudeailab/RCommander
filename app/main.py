@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.63"
+APP_VERSION = "1.6.64"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1314,48 +1314,85 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 dsm_leftover_enc = enc_buf[key_size:]
 
         print(f"[VNC {label}] DSM: decrypting {len(encrypted_key)}B session key")
-        aes_key = None
+        # Collect decrypted plaintext candidates from all padding schemes.
+        # A 32B result is common: AES-256 key, or AES-128 key + 16B extra.
+        # A 16B result is an exact AES-128 key.
+        # Collect ALL results (don't break early) so we can pick the one whose
+        # AES key makes the leftover SecurityResult decrypt to zero.
+        raw_candidates = []  # list of (description, bytes) sorted by preference
         for pad in [asym_padding.PKCS1v15(),
                     asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
                                       algorithm=hashes.SHA1(), label=None),
                     asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
                                       algorithm=hashes.SHA256(), label=None)]:
             try:
-                candidate = private_key.decrypt(encrypted_key, pad)
-                print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__}, "
-                      f"{len(candidate)}B) plaintext={candidate.hex()}")
-                if len(candidate) == 16:
-                    aes_key = candidate
-                    break  # exact match — done
-                else:
-                    print(f"[VNC {label}] DSM: {len(candidate)}B result (not 16B), "
-                          f"trying next padding scheme")
-                    # don't break — try next padding
+                plaintext = private_key.decrypt(encrypted_key, pad)
+                n = len(plaintext)
+                print(f"[VNC {label}] DSM {type(pad).__name__} → {n}B: {plaintext.hex()}")
+                if n == 16:
+                    raw_candidates.append(("AES-128", plaintext))
+                elif n == 32:
+                    raw_candidates.append(("AES-256", plaintext))
+                    raw_candidates.append(("AES-128-first16", plaintext[:16]))
+                    raw_candidates.append(("AES-128-last16", plaintext[16:]))
+                elif n >= 16:
+                    raw_candidates.append((f"AES-128-first16-of-{n}B", plaintext[:16]))
             except Exception as e:
                 print(f"[VNC {label}] {type(pad).__name__} failed: {e}")
 
-        if aes_key:
-            # Path A: server encrypted AES key with our public key (client-key mode).
-            aes_key = (aes_key + bytes(16))[:16]
-            writer.write(b"\x01")
-            await writer.drain()
+        # Path A: find the candidate AES key that makes SecurityResult = 0 in leftover.
+        # In 0x72 mode the server starts AES-OFB immediately after sending the
+        # encrypted key, so leftover bytes are already AES-encrypted.
+        # For OFB the keystream is independent of data, so we can probe each
+        # candidate without consuming the real cipher state.
+        aes_key = None
+        dsm_leftover_dec = b""
+        for key_desc, key_bytes in raw_candidates:
+            iv = bytes(16)
+            try:
+                probe = Cipher(algorithms.AES(key_bytes), _OFB(iv)).decryptor()
+                dec_left = probe.update(dsm_leftover_enc) if dsm_leftover_enc else b""
+                sr = int.from_bytes(dec_left[:4], "big") if len(dec_left) >= 4 else -1
+                print(f"[VNC {label}] DSM key={key_desc} ({key_bytes.hex()[:16]}…) "
+                      f"leftover-SR=0x{sr:08x}")
+                if sr == 0:
+                    aes_key = key_bytes
+                    dsm_leftover_dec = dec_left
+                    print(f"[VNC {label}] DSM Auth OK via Path A ({key_desc})")
+                    break
+            except Exception as e:
+                print(f"[VNC {label}] DSM probe {key_desc} failed: {e}")
+
+        # Fallback: use first candidate even without SecurityResult confirmation
+        if aes_key is None and raw_candidates:
+            key_desc, aes_key = raw_candidates[0]
+            iv = bytes(16)
+            probe = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
+            dsm_leftover_dec = probe.update(dsm_leftover_enc) if dsm_leftover_enc else b""
+            sr_fb = int.from_bytes(dsm_leftover_dec[:4], "big") if len(dsm_leftover_dec) >= 4 else -1
+            print(f"[VNC {label}] DSM: no SR=0 match; using fallback {key_desc} "
+                  f"(leftover-SR=0x{sr_fb:08x})")
+
+        if aes_key is not None:
+            # Path A: no ACK sent — in 0x72 mode the server starts the AES stream
+            # immediately after sending the encrypted key, no response expected.
             iv = bytes(16)
             enc_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).encryptor()
+            # dec_ctx must be at the same keystream position as the server's OFB encoder,
+            # which has already emitted len(leftover) bytes.  Advance by feeding dummy
+            # data — OFB feedback is keystream-only so the input value doesn't matter.
             dec_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
-            print(f"[VNC {label}] DSM AES-128-OFB active (client-key mode), key={aes_key.hex()}")
-            dsm_pre_buf = b""
             if dsm_leftover_enc:
-                dec_leftover = dec_ctx.update(dsm_leftover_enc)
-                print(f"[VNC {label}] DSM: leftover decrypted {len(dec_leftover)}B "
-                      f"hex={dec_leftover.hex()}")
-                if len(dec_leftover) >= 4:
-                    sec_result = int.from_bytes(dec_leftover[:4], "big")
-                    if sec_result != 0:
-                        raise ValueError(f"DSM SecurityResult failure: {sec_result}")
-                    print(f"[VNC {label}] DSM Auth OK (from leftover)")
-                    dsm_pre_buf = dec_leftover[4:]
-                else:
-                    dsm_pre_buf = dec_leftover
+                dec_ctx.update(bytes(len(dsm_leftover_enc)))  # advance past leftover
+            print(f"[VNC {label}] DSM AES active (key={aes_key.hex()})")
+            dsm_pre_buf = b""
+            if len(dsm_leftover_dec) >= 4:
+                sec_result = int.from_bytes(dsm_leftover_dec[:4], "big")
+                if sec_result != 0:
+                    raise _DSMAuthFailure(f"DSM SecurityResult in leftover: 0x{sec_result:08x}")
+                dsm_pre_buf = dsm_leftover_dec[4:]
+            else:
+                dsm_pre_buf = dsm_leftover_dec
             return enc_ctx, dec_ctx, dsm_pre_buf
         else:
             # Path B: bytes 22-277 are the SERVER's RSA public key modulus.
