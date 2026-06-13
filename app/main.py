@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.62"
+APP_VERSION = "1.6.63"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1174,6 +1174,7 @@ class _DSMAuthFailure(Exception):
 async def _server_rfb_handshake(reader, writer, client_key_path: str,
                                  password: str, label: str,
                                  dsm_exponent: int = 65537,
+                                 dsm_reverse_modulus: bool = True,
                                  dsm_reverse_cipher: bool = False):
     """
     Full server-side RFB handshake.  Handles version exchange, security type
@@ -1259,17 +1260,15 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             sub_types = list(server_greeting[5:5 + sub_count]) if sub_count else []
             print(f"[VNC {label}] DSM: sub_types={[hex(t) for t in sub_types]}")
 
-            # 0x72 = server uses client's pre-configured public key to encrypt AES key
-            # 0x73 = server sends its own public key, client generates+encrypts AES key
-            # Prefer 0x72 when we have a client private key; otherwise fall back to 0x73.
-            # Prefer 0x73 (server sends its RSA pubkey → client sends encrypted AES key).
-            # 0x72 = server uses pre-configured client pubkey to encrypt AES key (path A).
-            if 0x73 in sub_types:
-                chosen = 0x73
+            # 0x72 = server encrypts AES key with our pre-configured public key (Path A)
+            # 0x73 = server sends its own RSA public key; client generates+encrypts AES key (Path B)
+            # Prefer 0x72: server already has our public key, encrypts AES key for us to decrypt.
+            if 0x72 in sub_types:
+                chosen = 0x72
             elif sub_types:
                 chosen = sub_types[0]
             else:
-                chosen = 0x73
+                chosen = 0x72
             writer.write(bytes([chosen]))
             await writer.drain()
             print(f"[VNC {label}] DSM: sent sub-type 0x{chosen:02x}")
@@ -1318,17 +1317,20 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         aes_key = None
         for pad in [asym_padding.PKCS1v15(),
                     asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
-                                      algorithm=hashes.SHA1(), label=None)]:
+                                      algorithm=hashes.SHA1(), label=None),
+                    asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+                                      algorithm=hashes.SHA256(), label=None)]:
             try:
                 candidate = private_key.decrypt(encrypted_key, pad)
                 print(f"[VNC {label}] DSM key decrypted ({type(pad).__name__}, "
                       f"{len(candidate)}B) plaintext={candidate.hex()}")
                 if len(candidate) == 16:
                     aes_key = candidate
+                    break  # exact match — done
                 else:
-                    print(f"[VNC {label}] DSM: rejecting {len(candidate)}B plaintext "
-                          f"(expected 16B AES-128 key — likely false positive)")
-                break
+                    print(f"[VNC {label}] DSM: {len(candidate)}B result (not 16B), "
+                          f"trying next padding scheme")
+                    # don't break — try next padding
             except Exception as e:
                 print(f"[VNC {label}] {type(pad).__name__} failed: {e}")
 
@@ -1361,14 +1363,29 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             # and send [ACK(1B)][encrypted_key(256B)] back.  Server decrypts and both
             # sides use our randomly-generated AES key for the stream.
             print(f"[VNC {label}] DSM: decrypt failed — trying server-pubkey mode "
-                  f"(e={dsm_exponent}, cipher={'LE' if dsm_reverse_cipher else 'BE'})")
+                  f"(e={dsm_exponent}, mod={'LE' if dsm_reverse_modulus else 'BE'}, "
+                  f"cipher={'LE' if dsm_reverse_cipher else 'BE'})")
             from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-            # Modulus from server is in little-endian (Windows CryptoAPI convention);
-            # reverse bytes to reconstruct the big-endian integer for Python RSA.
-            server_n = int.from_bytes(encrypted_key[::-1], "big")
-            server_pub = RSAPublicNumbers(e=dsm_exponent, n=server_n).public_key()
-            aes_key = os.urandom(16)
-            encrypted_session = server_pub.encrypt(aes_key, asym_padding.PKCS1v15())
+            # Interpret modulus bytes as either LE (reversed) or BE (as-is).
+            if dsm_reverse_modulus:
+                server_n = int.from_bytes(encrypted_key[::-1], "big")  # LE → BE int
+            else:
+                server_n = int.from_bytes(encrypted_key, "big")        # already BE
+            # Validate: n must be odd and large enough.
+            if not (server_n & 1):
+                raise _DSMAuthFailure(
+                    f"e={dsm_exponent},mod={'LE' if dsm_reverse_modulus else 'BE'}: "
+                    f"modulus is even — not a valid RSA key"
+                )
+            try:
+                server_pub = RSAPublicNumbers(e=dsm_exponent, n=server_n).public_key()
+                aes_key = os.urandom(16)
+                encrypted_session = server_pub.encrypt(aes_key, asym_padding.PKCS1v15())
+            except Exception as key_err:
+                raise _DSMAuthFailure(
+                    f"e={dsm_exponent},mod={'LE' if dsm_reverse_modulus else 'BE'}: "
+                    f"key/encrypt error: {key_err}"
+                ) from key_err
             wire_cipher = encrypted_session[::-1] if dsm_reverse_cipher else encrypted_session
             writer.write(wire_cipher)
             await writer.drain()
@@ -1471,17 +1488,24 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     await websocket.accept()
 
-    # DSM type-17: try all (exponent, cipher-endian) combos until one succeeds.
-    # Each requires a fresh TCP connection since the server closes on auth failure.
+    # DSM type-17: try all (exponent, mod-endian, cipher-endian) Path-B combos.
+    # Path A (decrypt encrypted AES key with our private key) is tried first on each
+    # connection; if it succeeds the combo params are irrelevant. If Path A fails,
+    # Path B (server-pubkey mode) uses the combo. Each attempt needs a fresh TCP conn.
+    # _dsm_combos: (exponent, reverse_modulus, reverse_cipher)
     _dsm_combos = [
-        (65537, False),  # LE modulus, BE ciphertext (standard OpenSSL wire format)
-        (65537, True),   # LE modulus, LE ciphertext (Windows CryptDecrypt format)
-        (3,     False),  # e=3 with BE ciphertext
-        (3,     True),   # e=3 with LE ciphertext
+        (65537, True,  False),  # LE modulus, BE cipher (most natural for OpenSSL server)
+        (65537, True,  True),   # LE modulus, LE cipher (Windows CryptDecrypt)
+        (65537, False, False),  # BE modulus, BE cipher
+        (65537, False, True),   # BE modulus, LE cipher
+        (3,     True,  False),  # e=3 variants
+        (3,     True,  True),
+        (3,     False, False),
+        (3,     False, True),
     ]
     enc_ctx = dec_ctx = srv_pre_buf = None
     last_error = None
-    for _dsm_exp, _dsm_rev in _dsm_combos:
+    for _dsm_exp, _dsm_rev_mod, _dsm_rev_cip in _dsm_combos:
         try:
             reader, writer = await asyncio.open_connection(session["host"], session["port"])
             sock = writer.transport.get_extra_info("socket")
@@ -1500,12 +1524,14 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         try:
             enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
                 reader, writer, client_key_path, password, host_label,
-                dsm_exponent=_dsm_exp, dsm_reverse_cipher=_dsm_rev)
+                dsm_exponent=_dsm_exp,
+                dsm_reverse_modulus=_dsm_rev_mod,
+                dsm_reverse_cipher=_dsm_rev_cip)
             last_error = None
             break  # handshake succeeded
         except _DSMAuthFailure as e:
             last_error = e
-            print(f"[VNC {host_label}] DSM combo e={_dsm_exp},{'LE' if _dsm_rev else 'BE'} failed: {e}")
+            print(f"[VNC {host_label}] DSM combo failed: {e}")
             try:
                 writer.close()
             except Exception:
