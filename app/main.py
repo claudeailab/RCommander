@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.60"
+APP_VERSION = "1.6.61"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1377,12 +1377,18 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             print(f"[VNC {label}] DSM: discarding {len(dsm_leftover_enc)}B pre-exchange data")
             # Read SecurityResult from network (server sends it after decrypting our key)
             raw = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
+            plain_result = int.from_bytes(raw, "big")
             dec_raw = dec_ctx.update(raw)
-            result = int.from_bytes(dec_raw, "big")
-            if result != 0:
-                raise ValueError(f"DSM SecurityResult failure (server-pubkey mode): {result}")
-            print(f"[VNC {label}] DSM Auth OK (server-pubkey mode)")
-            return enc_ctx, dec_ctx, b""
+            enc_result = int.from_bytes(dec_raw, "big")
+            print(f"[VNC {label}] DSM: SecurityResult raw={raw.hex()} plain=0x{plain_result:08x} aes_dec=0x{enc_result:08x}")
+            # Accept success on either plain (unencrypted) or AES-decrypted zero
+            if plain_result == 0:
+                print(f"[VNC {label}] DSM Auth OK (server-pubkey mode, plain SecurityResult)")
+                return enc_ctx, dec_ctx, b""
+            if enc_result == 0:
+                print(f"[VNC {label}] DSM Auth OK (server-pubkey mode, AES-decrypted SecurityResult)")
+                return enc_ctx, dec_ctx, b""
+            raise ValueError(f"DSM SecurityResult failure (server-pubkey mode): plain=0x{plain_result:08x} aes=0x{enc_result:08x}")
     elif 1 in types:
         selected = 1
         writer.write(bytes([1]))
