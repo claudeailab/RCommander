@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.61"
+APP_VERSION = "1.6.62"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1167,8 +1167,14 @@ def _vnc_des_response(password: str, challenge: bytes) -> bytes:
         return b"\x00" * 16
 
 
+class _DSMAuthFailure(Exception):
+    """Raised when the VNC server returns SecurityResult != 0 for DSM type-17."""
+
+
 async def _server_rfb_handshake(reader, writer, client_key_path: str,
-                                 password: str, label: str):
+                                 password: str, label: str,
+                                 dsm_exponent: int = 65537,
+                                 dsm_reverse_cipher: bool = False):
     """
     Full server-side RFB handshake.  Handles version exchange, security type
     selection (type 17 UltraVNC-DSM, type 1 None, type 2 VNC-auth) and reads
@@ -1354,21 +1360,21 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             # Generate a random AES session key, RSA-encrypt it with server's pubkey,
             # and send [ACK(1B)][encrypted_key(256B)] back.  Server decrypts and both
             # sides use our randomly-generated AES key for the stream.
-            print(f"[VNC {label}] DSM: decrypt failed — trying server-pubkey mode")
+            print(f"[VNC {label}] DSM: decrypt failed — trying server-pubkey mode "
+                  f"(e={dsm_exponent}, cipher={'LE' if dsm_reverse_cipher else 'BE'})")
             from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-            # UltraVNC/Windows CryptoAPI stores RSA key material in little-endian.
-            # The last byte of encrypted_key (0x91 for this server) has the high bit
-            # set, confirming it is the most-significant byte in LE storage.
-            # Reverse to get the standard big-endian integer for Python crypto.
+            # Modulus from server is in little-endian (Windows CryptoAPI convention);
+            # reverse bytes to reconstruct the big-endian integer for Python RSA.
             server_n = int.from_bytes(encrypted_key[::-1], "big")
-            server_pub = RSAPublicNumbers(e=65537, n=server_n).public_key()
+            server_pub = RSAPublicNumbers(e=dsm_exponent, n=server_n).public_key()
             aes_key = os.urandom(16)
             encrypted_session = server_pub.encrypt(aes_key, asym_padding.PKCS1v15())
-            # Windows CryptDecrypt expects the ciphertext in little-endian; reverse ours.
-            writer.write(encrypted_session[::-1])
+            wire_cipher = encrypted_session[::-1] if dsm_reverse_cipher else encrypted_session
+            writer.write(wire_cipher)
             await writer.drain()
-            print(f"[VNC {label}] DSM: sent {len(encrypted_session)}B encrypted session key "
-                  f"(LE-reversed, no ACK), our AES key={aes_key.hex()}")
+            print(f"[VNC {label}] DSM: sent {len(wire_cipher)}B encrypted session key "
+                  f"(e={dsm_exponent}, {'LE' if dsm_reverse_cipher else 'BE'}), "
+                  f"our AES key={aes_key.hex()}")
             iv = bytes(16)
             enc_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).encryptor()
             dec_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
@@ -1383,12 +1389,15 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             print(f"[VNC {label}] DSM: SecurityResult raw={raw.hex()} plain=0x{plain_result:08x} aes_dec=0x{enc_result:08x}")
             # Accept success on either plain (unencrypted) or AES-decrypted zero
             if plain_result == 0:
-                print(f"[VNC {label}] DSM Auth OK (server-pubkey mode, plain SecurityResult)")
+                print(f"[VNC {label}] DSM Auth OK (e={dsm_exponent}, {'LE' if dsm_reverse_cipher else 'BE'}, plain SR)")
                 return enc_ctx, dec_ctx, b""
             if enc_result == 0:
-                print(f"[VNC {label}] DSM Auth OK (server-pubkey mode, AES-decrypted SecurityResult)")
+                print(f"[VNC {label}] DSM Auth OK (e={dsm_exponent}, {'LE' if dsm_reverse_cipher else 'BE'}, AES SR)")
                 return enc_ctx, dec_ctx, b""
-            raise ValueError(f"DSM SecurityResult failure (server-pubkey mode): plain=0x{plain_result:08x} aes=0x{enc_result:08x}")
+            raise _DSMAuthFailure(
+                f"e={dsm_exponent},{'LE' if dsm_reverse_cipher else 'BE'}: "
+                f"plain=0x{plain_result:08x} aes=0x{enc_result:08x}"
+            )
     elif 1 in types:
         selected = 1
         writer.write(bytes([1]))
@@ -1462,27 +1471,60 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     await websocket.accept()
 
-    try:
-        reader, writer = await asyncio.open_connection(session["host"], session["port"])
-        sock = writer.transport.get_extra_info("socket")
-        if sock:
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        print(f"[VNC {host_label}] TCP connected")
-    except Exception as e:
-        print(f"[VNC {host_label}] TCP connect failed: {e}")
+    # DSM type-17: try all (exponent, cipher-endian) combos until one succeeds.
+    # Each requires a fresh TCP connection since the server closes on auth failure.
+    _dsm_combos = [
+        (65537, False),  # LE modulus, BE ciphertext (standard OpenSSL wire format)
+        (65537, True),   # LE modulus, LE ciphertext (Windows CryptDecrypt format)
+        (3,     False),  # e=3 with BE ciphertext
+        (3,     True),   # e=3 with LE ciphertext
+    ]
+    enc_ctx = dec_ctx = srv_pre_buf = None
+    last_error = None
+    for _dsm_exp, _dsm_rev in _dsm_combos:
         try:
-            await websocket.close()
-        except Exception:
-            pass
-        return
+            reader, writer = await asyncio.open_connection(session["host"], session["port"])
+            sock = writer.transport.get_extra_info("socket")
+            if sock:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            print(f"[VNC {host_label}] TCP connected")
+        except Exception as e:
+            print(f"[VNC {host_label}] TCP connect failed: {e}")
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+            return
 
-    # Phase 1: full RFB handshake with the real VNC server
-    try:
-        enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
-            reader, writer, client_key_path, password, host_label)
-    except Exception as e:
-        print(f"[VNC {host_label}] Server handshake failed: {e}")
-        writer.close()
+        # Phase 1: full RFB handshake with the real VNC server
+        try:
+            enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
+                reader, writer, client_key_path, password, host_label,
+                dsm_exponent=_dsm_exp, dsm_reverse_cipher=_dsm_rev)
+            last_error = None
+            break  # handshake succeeded
+        except _DSMAuthFailure as e:
+            last_error = e
+            print(f"[VNC {host_label}] DSM combo e={_dsm_exp},{'LE' if _dsm_rev else 'BE'} failed: {e}")
+            try:
+                writer.close()
+            except Exception:
+                pass
+            continue  # try next combo
+        except Exception as e:
+            print(f"[VNC {host_label}] Server handshake failed: {e}")
+            try:
+                writer.close()
+            except Exception:
+                pass
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+            return
+
+    if last_error is not None:
+        print(f"[VNC {host_label}] All DSM combos exhausted: {last_error}")
         try:
             await websocket.close()
         except Exception:
