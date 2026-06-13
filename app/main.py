@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.64"
+APP_VERSION = "1.6.65"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1314,144 +1314,151 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 dsm_leftover_enc = enc_buf[key_size:]
 
         print(f"[VNC {label}] DSM: decrypting {len(encrypted_key)}B session key")
-        # Collect decrypted plaintext candidates from all padding schemes.
-        # A 32B result is common: AES-256 key, or AES-128 key + 16B extra.
-        # A 16B result is an exact AES-128 key.
-        # Collect ALL results (don't break early) so we can pick the one whose
-        # AES key makes the leftover SecurityResult decrypt to zero.
-        raw_candidates = []  # list of (description, bytes) sorted by preference
-        for pad in [asym_padding.PKCS1v15(),
-                    asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
-                                      algorithm=hashes.SHA1(), label=None),
-                    asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
-                                      algorithm=hashes.SHA256(), label=None)]:
+        # Collect AES key candidates from all padding schemes and byte orderings.
+        # Windows CryptoAPI (CryptEncrypt) reverses the RSA ciphertext bytes before
+        # sending, so we must try both the raw bytes and the reversed bytes.
+        # Exact 16-byte results are inserted at the front (highest priority).
+        raw_candidates = []
+        priv_nums = private_key.private_numbers()
+        for enc_bytes, ord_pfx in [(encrypted_key, ""), (encrypted_key[::-1], "REV-")]:
+            for pad in [asym_padding.PKCS1v15(),
+                        asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
+                                          algorithm=hashes.SHA1(), label=None),
+                        asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+                                          algorithm=hashes.SHA256(), label=None)]:
+                try:
+                    plaintext = private_key.decrypt(enc_bytes, pad)
+                    n = len(plaintext)
+                    pad_name = f"{ord_pfx}{type(pad).__name__}"
+                    print(f"[VNC {label}] DSM {pad_name} → {n}B: {plaintext.hex()}")
+                    if n == 16:
+                        raw_candidates.insert(0, (f"{pad_name}-16B", plaintext))
+                    elif n == 32:
+                        raw_candidates.append((f"{pad_name}-first16", plaintext[:16]))
+                        raw_candidates.append((f"{pad_name}-last16", plaintext[16:]))
+                        raw_candidates.append((f"{pad_name}-32B", plaintext))
+                    elif n >= 16:
+                        raw_candidates.append((f"{pad_name}-first16-of-{n}B", plaintext[:16]))
+                        raw_candidates.append((f"{pad_name}-last16-of-{n}B", plaintext[-16:]))
+                except Exception as e:
+                    print(f"[VNC {label}] DSM {ord_pfx}{type(pad).__name__} failed: {e}")
+            # Raw RSA decryption (no padding) — try last-16 and first-16 of m=c^d mod n
             try:
-                plaintext = private_key.decrypt(encrypted_key, pad)
-                n = len(plaintext)
-                print(f"[VNC {label}] DSM {type(pad).__name__} → {n}B: {plaintext.hex()}")
-                if n == 16:
-                    raw_candidates.append(("AES-128", plaintext))
-                elif n == 32:
-                    raw_candidates.append(("AES-256", plaintext))
-                    raw_candidates.append(("AES-128-first16", plaintext[:16]))
-                    raw_candidates.append(("AES-128-last16", plaintext[16:]))
-                elif n >= 16:
-                    raw_candidates.append((f"AES-128-first16-of-{n}B", plaintext[:16]))
+                c_int = int.from_bytes(enc_bytes, "big")
+                m_int = pow(c_int, priv_nums.d, priv_nums.public_numbers.n)
+                raw_dec = m_int.to_bytes(key_size, "big")
+                print(f"[VNC {label}] DSM {ord_pfx}RAW → last16={raw_dec[-16:].hex()} first16={raw_dec[:16].hex()}")
+                raw_candidates.append((f"{ord_pfx}RAW-last16", raw_dec[-16:]))
+                raw_candidates.append((f"{ord_pfx}RAW-first16", raw_dec[:16]))
             except Exception as e:
-                print(f"[VNC {label}] {type(pad).__name__} failed: {e}")
+                print(f"[VNC {label}] DSM {ord_pfx}RAW failed: {e}")
 
-        # Path A: find the candidate AES key that makes SecurityResult = 0 in leftover.
-        # In 0x72 mode the server starts AES-OFB immediately after sending the
-        # encrypted key, so leftover bytes are already AES-encrypted.
-        # For OFB the keystream is independent of data, so we can probe each
-        # candidate without consuming the real cipher state.
-        aes_key = None
+        # Path A: probe each candidate — find the key that decrypts leftover SR to 0.
+        # OFB keystream is data-independent, so we can probe without advancing real state.
+        path_a_aes_key = None
         dsm_leftover_dec = b""
         for key_desc, key_bytes in raw_candidates:
-            iv = bytes(16)
             try:
-                probe = Cipher(algorithms.AES(key_bytes), _OFB(iv)).decryptor()
+                probe = Cipher(algorithms.AES(key_bytes), _OFB(bytes(16))).decryptor()
                 dec_left = probe.update(dsm_leftover_enc) if dsm_leftover_enc else b""
                 sr = int.from_bytes(dec_left[:4], "big") if len(dec_left) >= 4 else -1
                 print(f"[VNC {label}] DSM key={key_desc} ({key_bytes.hex()[:16]}…) "
                       f"leftover-SR=0x{sr:08x}")
                 if sr == 0:
-                    aes_key = key_bytes
+                    path_a_aes_key = key_bytes
                     dsm_leftover_dec = dec_left
                     print(f"[VNC {label}] DSM Auth OK via Path A ({key_desc})")
                     break
             except Exception as e:
                 print(f"[VNC {label}] DSM probe {key_desc} failed: {e}")
 
-        # Fallback: use first candidate even without SecurityResult confirmation
-        if aes_key is None and raw_candidates:
-            key_desc, aes_key = raw_candidates[0]
+        # If a candidate confirmed SR=0, use it and return.
+        if path_a_aes_key is not None:
             iv = bytes(16)
-            probe = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
+            enc_ctx = Cipher(algorithms.AES(path_a_aes_key), _OFB(iv)).encryptor()
+            dec_ctx = Cipher(algorithms.AES(path_a_aes_key), _OFB(iv)).decryptor()
+            if dsm_leftover_enc:
+                dec_ctx.update(bytes(len(dsm_leftover_enc)))
+            dsm_pre_buf = dsm_leftover_dec[4:]
+            print(f"[VNC {label}] DSM AES active via Path A (key={path_a_aes_key.hex()})")
+            return enc_ctx, dec_ctx, dsm_pre_buf
+
+        # No candidate confirmed SR=0 — check fallback (first candidate, unconfirmed).
+        # If even the fallback SR is non-zero, skip to Path B on this same TCP connection
+        # rather than raising and wasting the connection (server may rate-limit new ones).
+        path_a_fallback_ok = False
+        fallback_aes_key = None
+        if raw_candidates:
+            fb_desc, fallback_aes_key = raw_candidates[0]
+            probe = Cipher(algorithms.AES(fallback_aes_key), _OFB(bytes(16))).decryptor()
             dsm_leftover_dec = probe.update(dsm_leftover_enc) if dsm_leftover_enc else b""
             sr_fb = int.from_bytes(dsm_leftover_dec[:4], "big") if len(dsm_leftover_dec) >= 4 else -1
-            print(f"[VNC {label}] DSM: no SR=0 match; using fallback {key_desc} "
-                  f"(leftover-SR=0x{sr_fb:08x})")
+            print(f"[VNC {label}] DSM: no SR=0 match; fallback {fb_desc} leftover-SR=0x{sr_fb:08x}")
+            if len(dsm_leftover_dec) < 4:
+                # No leftover to probe — accept fallback tentatively
+                path_a_fallback_ok = True
 
-        if aes_key is not None:
-            # Path A: no ACK sent — in 0x72 mode the server starts the AES stream
-            # immediately after sending the encrypted key, no response expected.
+        if path_a_fallback_ok and fallback_aes_key is not None:
             iv = bytes(16)
-            enc_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).encryptor()
-            # dec_ctx must be at the same keystream position as the server's OFB encoder,
-            # which has already emitted len(leftover) bytes.  Advance by feeding dummy
-            # data — OFB feedback is keystream-only so the input value doesn't matter.
-            dec_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
+            enc_ctx = Cipher(algorithms.AES(fallback_aes_key), _OFB(iv)).encryptor()
+            dec_ctx = Cipher(algorithms.AES(fallback_aes_key), _OFB(iv)).decryptor()
             if dsm_leftover_enc:
-                dec_ctx.update(bytes(len(dsm_leftover_enc)))  # advance past leftover
-            print(f"[VNC {label}] DSM AES active (key={aes_key.hex()})")
-            dsm_pre_buf = b""
-            if len(dsm_leftover_dec) >= 4:
-                sec_result = int.from_bytes(dsm_leftover_dec[:4], "big")
-                if sec_result != 0:
-                    raise _DSMAuthFailure(f"DSM SecurityResult in leftover: 0x{sec_result:08x}")
-                dsm_pre_buf = dsm_leftover_dec[4:]
-            else:
-                dsm_pre_buf = dsm_leftover_dec
-            return enc_ctx, dec_ctx, dsm_pre_buf
+                dec_ctx.update(bytes(len(dsm_leftover_enc)))
+            print(f"[VNC {label}] DSM AES tentative via Path A fallback (key={fallback_aes_key.hex()})")
+            return enc_ctx, dec_ctx, dsm_leftover_dec
+
+        # Path B: treat encrypted_key as the SERVER's RSA public key modulus.
+        # Windows CryptoAPI exports the modulus in little-endian (reversed) byte order.
+        # We encrypt a random AES session key with the server's public key and send it.
+        # Server decrypts with its private key, both sides use the shared AES key.
+        print(f"[VNC {label}] DSM: Path A exhausted — trying Path B on same connection "
+              f"(e={dsm_exponent}, mod={'LE' if dsm_reverse_modulus else 'BE'}, "
+              f"cipher={'LE' if dsm_reverse_cipher else 'BE'})")
+        from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+        if dsm_reverse_modulus:
+            server_n = int.from_bytes(encrypted_key[::-1], "big")
         else:
-            # Path B: bytes 22-277 are the SERVER's RSA public key modulus.
-            # Generate a random AES session key, RSA-encrypt it with server's pubkey,
-            # and send [ACK(1B)][encrypted_key(256B)] back.  Server decrypts and both
-            # sides use our randomly-generated AES key for the stream.
-            print(f"[VNC {label}] DSM: decrypt failed — trying server-pubkey mode "
-                  f"(e={dsm_exponent}, mod={'LE' if dsm_reverse_modulus else 'BE'}, "
-                  f"cipher={'LE' if dsm_reverse_cipher else 'BE'})")
-            from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-            # Interpret modulus bytes as either LE (reversed) or BE (as-is).
-            if dsm_reverse_modulus:
-                server_n = int.from_bytes(encrypted_key[::-1], "big")  # LE → BE int
-            else:
-                server_n = int.from_bytes(encrypted_key, "big")        # already BE
-            # Validate: n must be odd and large enough.
-            if not (server_n & 1):
-                raise _DSMAuthFailure(
-                    f"e={dsm_exponent},mod={'LE' if dsm_reverse_modulus else 'BE'}: "
-                    f"modulus is even — not a valid RSA key"
-                )
-            try:
-                server_pub = RSAPublicNumbers(e=dsm_exponent, n=server_n).public_key()
-                aes_key = os.urandom(16)
-                encrypted_session = server_pub.encrypt(aes_key, asym_padding.PKCS1v15())
-            except Exception as key_err:
-                raise _DSMAuthFailure(
-                    f"e={dsm_exponent},mod={'LE' if dsm_reverse_modulus else 'BE'}: "
-                    f"key/encrypt error: {key_err}"
-                ) from key_err
-            wire_cipher = encrypted_session[::-1] if dsm_reverse_cipher else encrypted_session
-            writer.write(wire_cipher)
-            await writer.drain()
-            print(f"[VNC {label}] DSM: sent {len(wire_cipher)}B encrypted session key "
-                  f"(e={dsm_exponent}, {'LE' if dsm_reverse_cipher else 'BE'}), "
-                  f"our AES key={aes_key.hex()}")
-            iv = bytes(16)
-            enc_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).encryptor()
-            dec_ctx = Cipher(algorithms.AES(aes_key), _OFB(iv)).decryptor()
-            # leftover bytes were sent by server BEFORE it knew our AES key →
-            # they cannot be encrypted with the session key; discard them.
-            print(f"[VNC {label}] DSM: discarding {len(dsm_leftover_enc)}B pre-exchange data")
-            # Read SecurityResult from network (server sends it after decrypting our key)
-            raw = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
-            plain_result = int.from_bytes(raw, "big")
-            dec_raw = dec_ctx.update(raw)
-            enc_result = int.from_bytes(dec_raw, "big")
-            print(f"[VNC {label}] DSM: SecurityResult raw={raw.hex()} plain=0x{plain_result:08x} aes_dec=0x{enc_result:08x}")
-            # Accept success on either plain (unencrypted) or AES-decrypted zero
-            if plain_result == 0:
-                print(f"[VNC {label}] DSM Auth OK (e={dsm_exponent}, {'LE' if dsm_reverse_cipher else 'BE'}, plain SR)")
-                return enc_ctx, dec_ctx, b""
-            if enc_result == 0:
-                print(f"[VNC {label}] DSM Auth OK (e={dsm_exponent}, {'LE' if dsm_reverse_cipher else 'BE'}, AES SR)")
-                return enc_ctx, dec_ctx, b""
+            server_n = int.from_bytes(encrypted_key, "big")
+        if not (server_n & 1):
             raise _DSMAuthFailure(
-                f"e={dsm_exponent},{'LE' if dsm_reverse_cipher else 'BE'}: "
-                f"plain=0x{plain_result:08x} aes=0x{enc_result:08x}"
+                f"e={dsm_exponent},mod={'LE' if dsm_reverse_modulus else 'BE'}: "
+                f"modulus is even — not a valid RSA key"
             )
+        try:
+            server_pub = RSAPublicNumbers(e=dsm_exponent, n=server_n).public_key()
+            path_b_aes_key = os.urandom(16)
+            encrypted_session = server_pub.encrypt(path_b_aes_key, asym_padding.PKCS1v15())
+        except Exception as key_err:
+            raise _DSMAuthFailure(
+                f"e={dsm_exponent},mod={'LE' if dsm_reverse_modulus else 'BE'}: "
+                f"key/encrypt error: {key_err}"
+            ) from key_err
+        wire_cipher = encrypted_session[::-1] if dsm_reverse_cipher else encrypted_session
+        writer.write(wire_cipher)
+        await writer.drain()
+        print(f"[VNC {label}] DSM Path B: sent {len(wire_cipher)}B encrypted session key "
+              f"(e={dsm_exponent}, {'LE' if dsm_reverse_cipher else 'BE'}), "
+              f"our AES key={path_b_aes_key.hex()}")
+        iv = bytes(16)
+        enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(iv)).encryptor()
+        dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(iv)).decryptor()
+        print(f"[VNC {label}] DSM: discarding {len(dsm_leftover_enc)}B pre-exchange leftover")
+        raw = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
+        plain_result = int.from_bytes(raw, "big")
+        dec_raw = dec_ctx.update(raw)
+        enc_result = int.from_bytes(dec_raw, "big")
+        print(f"[VNC {label}] DSM Path B: SecurityResult raw={raw.hex()} "
+              f"plain=0x{plain_result:08x} aes_dec=0x{enc_result:08x}")
+        if plain_result == 0:
+            print(f"[VNC {label}] DSM Auth OK via Path B (plain SR)")
+            return enc_ctx, dec_ctx, b""
+        if enc_result == 0:
+            print(f"[VNC {label}] DSM Auth OK via Path B (AES SR)")
+            return enc_ctx, dec_ctx, b""
+        raise _DSMAuthFailure(
+            f"Path B e={dsm_exponent},{'LE' if dsm_reverse_cipher else 'BE'}: "
+            f"plain=0x{plain_result:08x} aes=0x{enc_result:08x}"
+        )
     elif 1 in types:
         selected = 1
         writer.write(bytes([1]))
@@ -1530,13 +1537,15 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     # connection; if it succeeds the combo params are irrelevant. If Path A fails,
     # Path B (server-pubkey mode) uses the combo. Each attempt needs a fresh TCP conn.
     # _dsm_combos: (exponent, reverse_modulus, reverse_cipher)
+    # (exponent, reverse_modulus, reverse_cipher)
+    # Windows CryptoAPI exports modulus LE and reverses ciphertext → (65537, True, True) first.
     _dsm_combos = [
-        (65537, True,  False),  # LE modulus, BE cipher (most natural for OpenSSL server)
-        (65537, True,  True),   # LE modulus, LE cipher (Windows CryptDecrypt)
+        (65537, True,  True),   # LE modulus, LE cipher — Windows CryptoAPI standard
+        (65537, True,  False),  # LE modulus, BE cipher
         (65537, False, False),  # BE modulus, BE cipher
         (65537, False, True),   # BE modulus, LE cipher
-        (3,     True,  False),  # e=3 variants
-        (3,     True,  True),
+        (3,     True,  True),   # e=3 variants
+        (3,     True,  False),
         (3,     False, False),
         (3,     False, True),
     ]
