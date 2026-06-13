@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.65"
+APP_VERSION = "1.6.66"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1260,15 +1260,18 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             sub_types = list(server_greeting[5:5 + sub_count]) if sub_count else []
             print(f"[VNC {label}] DSM: sub_types={[hex(t) for t in sub_types]}")
 
-            # 0x72 = server encrypts AES key with our pre-configured public key (Path A)
             # 0x73 = server sends its own RSA public key; client generates+encrypts AES key (Path B)
-            # Prefer 0x72: server already has our public key, encrypts AES key for us to decrypt.
-            if 0x72 in sub_types:
+            # 0x72 = server encrypts AES key with our pre-configured public key (Path A)
+            # Prefer 0x73: server sends its pubkey regardless, and selecting it means
+            # the server waits for our encrypted key before streaming (no leftover).
+            if 0x73 in sub_types:
+                chosen = 0x73
+            elif 0x72 in sub_types:
                 chosen = 0x72
             elif sub_types:
                 chosen = sub_types[0]
             else:
-                chosen = 0x72
+                chosen = 0x73
             writer.write(bytes([chosen]))
             await writer.drain()
             print(f"[VNC {label}] DSM: sent sub-type 0x{chosen:02x}")
@@ -1383,27 +1386,28 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             print(f"[VNC {label}] DSM AES active via Path A (key={path_a_aes_key.hex()})")
             return enc_ctx, dec_ctx, dsm_pre_buf
 
-        # No candidate confirmed SR=0 — check fallback (first candidate, unconfirmed).
-        # If even the fallback SR is non-zero, skip to Path B on this same TCP connection
-        # rather than raising and wasting the connection (server may rate-limit new ones).
+        # No candidate confirmed SR=0.
+        # If leftover exists but is < 4 bytes, we can't probe SR — accept first candidate.
+        # If leftover is empty (0x73 mode: server is waiting for our key), fall to Path B.
+        # If leftover is ≥ 4 bytes with non-zero SR, fall to Path B on this same connection.
         path_a_fallback_ok = False
         fallback_aes_key = None
-        if raw_candidates:
+        if raw_candidates and dsm_leftover_enc:
             fb_desc, fallback_aes_key = raw_candidates[0]
             probe = Cipher(algorithms.AES(fallback_aes_key), _OFB(bytes(16))).decryptor()
-            dsm_leftover_dec = probe.update(dsm_leftover_enc) if dsm_leftover_enc else b""
+            dsm_leftover_dec = probe.update(dsm_leftover_enc)
             sr_fb = int.from_bytes(dsm_leftover_dec[:4], "big") if len(dsm_leftover_dec) >= 4 else -1
             print(f"[VNC {label}] DSM: no SR=0 match; fallback {fb_desc} leftover-SR=0x{sr_fb:08x}")
             if len(dsm_leftover_dec) < 4:
-                # No leftover to probe — accept fallback tentatively
                 path_a_fallback_ok = True
+        else:
+            print(f"[VNC {label}] DSM: no SR=0 match; no leftover to probe — falling to Path B")
 
         if path_a_fallback_ok and fallback_aes_key is not None:
             iv = bytes(16)
             enc_ctx = Cipher(algorithms.AES(fallback_aes_key), _OFB(iv)).encryptor()
             dec_ctx = Cipher(algorithms.AES(fallback_aes_key), _OFB(iv)).decryptor()
-            if dsm_leftover_enc:
-                dec_ctx.update(bytes(len(dsm_leftover_enc)))
+            dec_ctx.update(bytes(len(dsm_leftover_enc)))
             print(f"[VNC {label}] DSM AES tentative via Path A fallback (key={fallback_aes_key.hex()})")
             return enc_ctx, dec_ctx, dsm_leftover_dec
 
@@ -1419,25 +1423,34 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             server_n = int.from_bytes(encrypted_key[::-1], "big")
         else:
             server_n = int.from_bytes(encrypted_key, "big")
+        actual_rev_mod = dsm_reverse_modulus
         if not (server_n & 1):
-            raise _DSMAuthFailure(
-                f"e={dsm_exponent},mod={'LE' if dsm_reverse_modulus else 'BE'}: "
-                f"modulus is even — not a valid RSA key"
-            )
+            # Preferred byte order gives even modulus — automatically try the alternate.
+            alt_n = int.from_bytes(encrypted_key, "big") if dsm_reverse_modulus else int.from_bytes(encrypted_key[::-1], "big")
+            if alt_n & 1:
+                print(f"[VNC {label}] DSM Path B: {'LE' if dsm_reverse_modulus else 'BE'} modulus even, "
+                      f"falling back to {'BE' if dsm_reverse_modulus else 'LE'}")
+                server_n = alt_n
+                actual_rev_mod = not dsm_reverse_modulus
+            else:
+                raise _DSMAuthFailure(
+                    f"e={dsm_exponent}: both LE and BE modulus are even — not a valid RSA key"
+                )
         try:
             server_pub = RSAPublicNumbers(e=dsm_exponent, n=server_n).public_key()
             path_b_aes_key = os.urandom(16)
             encrypted_session = server_pub.encrypt(path_b_aes_key, asym_padding.PKCS1v15())
         except Exception as key_err:
             raise _DSMAuthFailure(
-                f"e={dsm_exponent},mod={'LE' if dsm_reverse_modulus else 'BE'}: "
+                f"e={dsm_exponent},mod={'LE' if actual_rev_mod else 'BE'}: "
                 f"key/encrypt error: {key_err}"
             ) from key_err
         wire_cipher = encrypted_session[::-1] if dsm_reverse_cipher else encrypted_session
         writer.write(wire_cipher)
         await writer.drain()
         print(f"[VNC {label}] DSM Path B: sent {len(wire_cipher)}B encrypted session key "
-              f"(e={dsm_exponent}, {'LE' if dsm_reverse_cipher else 'BE'}), "
+              f"(e={dsm_exponent}, mod={'LE' if actual_rev_mod else 'BE'}, "
+              f"cipher={'LE' if dsm_reverse_cipher else 'BE'}), "
               f"our AES key={path_b_aes_key.hex()}")
         iv = bytes(16)
         enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(iv)).encryptor()
@@ -1456,7 +1469,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             print(f"[VNC {label}] DSM Auth OK via Path B (AES SR)")
             return enc_ctx, dec_ctx, b""
         raise _DSMAuthFailure(
-            f"Path B e={dsm_exponent},{'LE' if dsm_reverse_cipher else 'BE'}: "
+            f"Path B e={dsm_exponent},mod={'LE' if actual_rev_mod else 'BE'},"
+            f"cip={'LE' if dsm_reverse_cipher else 'BE'}: "
             f"plain=0x{plain_result:08x} aes=0x{enc_result:08x}"
         )
     elif 1 in types:
