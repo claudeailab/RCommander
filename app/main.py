@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.66"
+APP_VERSION = "1.6.67"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1175,7 +1175,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                                  password: str, label: str,
                                  dsm_exponent: int = 65537,
                                  dsm_reverse_modulus: bool = True,
-                                 dsm_reverse_cipher: bool = False):
+                                 dsm_reverse_cipher: bool = False,
+                                 dsm_raw_rsa: bool = False):
     """
     Full server-side RFB handshake.  Handles version exchange, security type
     selection (type 17 UltraVNC-DSM, type 1 None, type 2 VNC-auth) and reads
@@ -1417,7 +1418,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         # Server decrypts with its private key, both sides use the shared AES key.
         print(f"[VNC {label}] DSM: Path A exhausted — trying Path B on same connection "
               f"(e={dsm_exponent}, mod={'LE' if dsm_reverse_modulus else 'BE'}, "
-              f"cipher={'LE' if dsm_reverse_cipher else 'BE'})")
+              f"cipher={'LE' if dsm_reverse_cipher else 'BE'}, "
+              f"rsa={'raw' if dsm_raw_rsa else 'PKCS1v15'})")
         from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
         if dsm_reverse_modulus:
             server_n = int.from_bytes(encrypted_key[::-1], "big")
@@ -1437,9 +1439,17 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                     f"e={dsm_exponent}: both LE and BE modulus are even — not a valid RSA key"
                 )
         try:
-            server_pub = RSAPublicNumbers(e=dsm_exponent, n=server_n).public_key()
             path_b_aes_key = os.urandom(16)
-            encrypted_session = server_pub.encrypt(path_b_aes_key, asym_padding.PKCS1v15())
+            key_size = (server_n.bit_length() + 7) // 8
+            if dsm_raw_rsa:
+                # Raw RSA: c = m^e mod n, message is zero-padded AES key (right-aligned)
+                m_bytes = b"\x00" * (key_size - len(path_b_aes_key)) + path_b_aes_key
+                m_int = int.from_bytes(m_bytes, "big")
+                c_int = pow(m_int, dsm_exponent, server_n)
+                encrypted_session = c_int.to_bytes(key_size, "big")
+            else:
+                server_pub = RSAPublicNumbers(e=dsm_exponent, n=server_n).public_key()
+                encrypted_session = server_pub.encrypt(path_b_aes_key, asym_padding.PKCS1v15())
         except Exception as key_err:
             raise _DSMAuthFailure(
                 f"e={dsm_exponent},mod={'LE' if actual_rev_mod else 'BE'}: "
@@ -1450,7 +1460,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         await writer.drain()
         print(f"[VNC {label}] DSM Path B: sent {len(wire_cipher)}B encrypted session key "
               f"(e={dsm_exponent}, mod={'LE' if actual_rev_mod else 'BE'}, "
-              f"cipher={'LE' if dsm_reverse_cipher else 'BE'}), "
+              f"cipher={'LE' if dsm_reverse_cipher else 'BE'}, "
+              f"rsa={'raw' if dsm_raw_rsa else 'PKCS1v15'}), "
               f"our AES key={path_b_aes_key.hex()}")
         iv = bytes(16)
         enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(iv)).encryptor()
@@ -1470,7 +1481,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             return enc_ctx, dec_ctx, b""
         raise _DSMAuthFailure(
             f"Path B e={dsm_exponent},mod={'LE' if actual_rev_mod else 'BE'},"
-            f"cip={'LE' if dsm_reverse_cipher else 'BE'}: "
+            f"cip={'LE' if dsm_reverse_cipher else 'BE'},"
+            f"rsa={'raw' if dsm_raw_rsa else 'pkcs'}: "
             f"plain=0x{plain_result:08x} aes=0x{enc_result:08x}"
         )
     elif 1 in types:
@@ -1546,26 +1558,26 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     await websocket.accept()
 
-    # DSM type-17: try all (exponent, mod-endian, cipher-endian) Path-B combos.
+    # DSM type-17: try all (exponent, mod-endian, cipher-endian, raw_rsa) Path-B combos.
     # Path A (decrypt encrypted AES key with our private key) is tried first on each
     # connection; if it succeeds the combo params are irrelevant. If Path A fails,
     # Path B (server-pubkey mode) uses the combo. Each attempt needs a fresh TCP conn.
-    # _dsm_combos: (exponent, reverse_modulus, reverse_cipher)
-    # (exponent, reverse_modulus, reverse_cipher)
-    # Windows CryptoAPI exports modulus LE and reverses ciphertext → (65537, True, True) first.
+    # _dsm_combos: (exponent, reverse_modulus, reverse_cipher, raw_rsa)
+    # Raw RSA combos first — UltraVNC SecureVNCPlugin2 uses unpadded RSA.
     _dsm_combos = [
-        (65537, True,  True),   # LE modulus, LE cipher — Windows CryptoAPI standard
-        (65537, True,  False),  # LE modulus, BE cipher
-        (65537, False, False),  # BE modulus, BE cipher
-        (65537, False, True),   # BE modulus, LE cipher
-        (3,     True,  True),   # e=3 variants
-        (3,     True,  False),
-        (3,     False, False),
-        (3,     False, True),
+        # (exponent, reverse_modulus, reverse_cipher, raw_rsa)
+        (65537, True,  True,  True),   # LE modulus, LE cipher, raw RSA — Windows CryptoAPI standard
+        (65537, True,  False, True),   # LE modulus, BE cipher, raw RSA
+        (65537, False, False, True),   # BE modulus, BE cipher, raw RSA
+        (65537, False, True,  True),   # BE modulus, LE cipher, raw RSA
+        (65537, True,  True,  False),  # LE modulus, LE cipher, PKCS1v15
+        (65537, True,  False, False),  # LE modulus, BE cipher, PKCS1v15
+        (65537, False, False, False),  # BE modulus, BE cipher, PKCS1v15
+        (65537, False, True,  False),  # BE modulus, LE cipher, PKCS1v15
     ]
     enc_ctx = dec_ctx = srv_pre_buf = None
     last_error = None
-    for _dsm_exp, _dsm_rev_mod, _dsm_rev_cip in _dsm_combos:
+    for _dsm_exp, _dsm_rev_mod, _dsm_rev_cip, _dsm_raw in _dsm_combos:
         try:
             reader, writer = await asyncio.open_connection(session["host"], session["port"])
             sock = writer.transport.get_extra_info("socket")
@@ -1586,7 +1598,8 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
                 reader, writer, client_key_path, password, host_label,
                 dsm_exponent=_dsm_exp,
                 dsm_reverse_modulus=_dsm_rev_mod,
-                dsm_reverse_cipher=_dsm_rev_cip)
+                dsm_reverse_cipher=_dsm_rev_cip,
+                dsm_raw_rsa=_dsm_raw)
             last_error = None
             break  # handshake succeeded
         except _DSMAuthFailure as e:
