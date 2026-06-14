@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.67"
+APP_VERSION = "1.6.68"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1479,6 +1479,19 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         if enc_result == 0:
             print(f"[VNC {label}] DSM Auth OK via Path B (AES SR)")
             return enc_ctx, dec_ctx, b""
+        # Read extra bytes for diagnostics: RFB 3.8 appends a reason string after SR≠0.
+        # Also check subsequent 16 bytes in case server is sending a challenge instead.
+        try:
+            extra = await asyncio.wait_for(reader.read(20), timeout=1.0)
+            print(f"[VNC {label}] DSM Path B extra: {extra.hex()!r}")
+            # Try to parse as RFB reason: 4-byte BE length + string
+            if len(extra) >= 4:
+                rlen = int.from_bytes(extra[:4], "big")
+                if 0 < rlen <= 256 and len(extra) >= 4 + rlen:
+                    reason = extra[4:4 + rlen].decode(errors="replace")
+                    print(f"[VNC {label}] DSM Path B reason string: {reason!r}")
+        except Exception:
+            pass
         raise _DSMAuthFailure(
             f"Path B e={dsm_exponent},mod={'LE' if actual_rev_mod else 'BE'},"
             f"cip={'LE' if dsm_reverse_cipher else 'BE'},"
