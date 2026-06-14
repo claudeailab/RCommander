@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import io
 import json
 import os
@@ -131,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.74"
+APP_VERSION = "1.6.75"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1171,6 +1172,51 @@ class _DSMAuthFailure(Exception):
     """Raised when the VNC server returns SecurityResult != 0 for DSM type-17."""
 
 
+def _parse_rsapubkey_ber(data: bytes):
+    """
+    Parse a BER/DER-encoded RSAPublicKey (SEQUENCE { INTEGER n, INTEGER e })
+    and return a cryptography public key object.  Accepts BER 0x10 SEQUENCE tag
+    (used by UltraVNC SecureVNCPlugin2) as well as standard DER 0x30.
+    """
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+    buf = bytearray(data)
+    if buf[0] in (0x10, 0x30):
+        buf[0] = 0x30  # normalise to DER constructed SEQUENCE
+    pos = 0
+    if buf[pos] != 0x30:
+        raise ValueError(f"Expected SEQUENCE tag, got 0x{buf[pos]:02x}")
+    pos += 1
+    if buf[pos] & 0x80:
+        llen = buf[pos] & 0x7f
+        pos += 1 + llen
+    else:
+        pos += 1
+    # modulus
+    if buf[pos] != 0x02:
+        raise ValueError(f"Expected INTEGER for modulus, got 0x{buf[pos]:02x}")
+    pos += 1
+    if buf[pos] & 0x80:
+        llen = buf[pos] & 0x7f
+        n_len = int.from_bytes(buf[pos + 1:pos + 1 + llen], "big")
+        pos += 1 + llen
+    else:
+        n_len = buf[pos]; pos += 1
+    n = int.from_bytes(buf[pos:pos + n_len], "big")
+    pos += n_len
+    # exponent
+    if buf[pos] != 0x02:
+        raise ValueError(f"Expected INTEGER for exponent, got 0x{buf[pos]:02x}")
+    pos += 1
+    if buf[pos] & 0x80:
+        llen = buf[pos] & 0x7f
+        e_len = int.from_bytes(buf[pos + 1:pos + 1 + llen], "big")
+        pos += 1 + llen
+    else:
+        e_len = buf[pos]; pos += 1
+    e = int.from_bytes(buf[pos:pos + e_len], "big")
+    return RSAPublicNumbers(e=e, n=n).public_key()
+
+
 async def _server_rfb_handshake(reader, writer, client_key_path: str,
                                  password: str, label: str,
                                  dsm_exponent: int = 65537,
@@ -1284,18 +1330,80 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
 
             dsm_leftover_enc = b""
 
-            # Read any server reply after sub-type selection (may be empty)
-            try:
-                after_sub = await asyncio.wait_for(reader.read(key_size * 2), timeout=1.0)
-                print(f"[VNC {label}] DSM: server after sub-type: "
-                      f"{len(after_sub)}B hex={after_sub.hex()}")
-            except asyncio.TimeoutError:
-                after_sub = b""
-                print(f"[VNC {label}] DSM: server silent after sub-type — sending pubkey")
+            # Read server reply after sub-type selection.
+            # For 0x73: server sends [22B plugin header][270B BER RSA pubkey][4B flags][42B challenge] = 338B.
+            # For 0x72: server sends [22B header][key_size RSA-encrypted AES key][leftover].
+            # Read in a loop until we have enough bytes or the server goes silent.
+            after_sub = b""
+            need = 338 if chosen == 0x73 else (22 + key_size)
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while len(after_sub) < need and asyncio.get_event_loop().time() < deadline:
+                try:
+                    chunk = await asyncio.wait_for(reader.read(1024), timeout=1.0)
+                    if not chunk:
+                        break
+                    after_sub += chunk
+                except asyncio.TimeoutError:
+                    if after_sub:
+                        break  # got some data; server has gone quiet
+            print(f"[VNC {label}] DSM: server after sub-type 0x{chosen:02x}: "
+                  f"{len(after_sub)}B hex={after_sub[:32].hex()}")
+
+            if chosen == 0x73:
+                # Sub-type 0x73: UltraVNC SecureVNCPlugin2 "server key" mode.
+                # Server sends its RSA public key; we generate an AES session key,
+                # encrypt it with the server's public key, and send it back.
+                # Protocol (from ultravnc_dsm_helper disassembly):
+                #   recv: [22B plugin header][270B BER RSAPublicKey][4B flags][~42B RC4 challenge]
+                #   send: RSA_public_encrypt(16, aes_key, PKCS1_PADDING) [256B] + \x00\x00\x00
+                #   AES-128-OFB with aes_key, IV=zeros used for all subsequent traffic.
+                if len(after_sub) < 292:  # need at least 22+270 bytes
+                    raise ValueError(f"DSM 0x73: server reply too short ({len(after_sub)}B, need 292)")
+                hdr22 = after_sub[:22]
+                rsa_key_ber = bytearray(after_sub[22:292])  # 270 bytes BER RSAPublicKey
+                flags4 = after_sub[292:296] if len(after_sub) >= 296 else b""
+                rc4_chal = after_sub[296:] if len(after_sub) > 296 else b""
+                print(f"[VNC {label}] DSM 0x73: hdr={hdr22.hex()} "
+                      f"rsa_key[0]=0x{rsa_key_ber[0]:02x} flags={flags4.hex()} "
+                      f"challenge={len(rc4_chal)}B")
+
+                # Parse server's BER RSAPublicKey (0x10 SEQUENCE tag → fix to 0x30 for DER).
+                server_pub = _parse_rsapubkey_ber(bytes(rsa_key_ber))
+                srv_key_bytes = (server_pub.key_size + 7) // 8
+                print(f"[VNC {label}] DSM 0x73: server RSA key parsed, "
+                      f"key_size={server_pub.key_size}b")
+
+                # Generate 16-byte AES-128 session key.
+                aes_key_73 = os.urandom(16)
+                aes_iv_73 = bytes(16)  # IV = all zeros
+
+                # RSA-encrypt the 16-byte AES key with the server's public key (PKCS#1 v1.5).
+                enc_aes_73 = server_pub.encrypt(aes_key_73, asym_padding.PKCS1v15())
+                # enc_aes_73 is srv_key_bytes long (256 for RSA-2048).
+
+                # Send: RSA-encrypted AES key + 3 null bytes (as observed in the binary).
+                writer.write(enc_aes_73 + b"\x00\x00\x00")
+                await writer.drain()
+                print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B RSA-encrypted AES key "
+                      f"+ 3 null bytes; aes_key={aes_key_73.hex()} iv=zeros")
+
+                # Set up AES-128-OFB cipher contexts (separate instances for enc and dec).
+                enc_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).encryptor()
+                dec_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).decryptor()
+
+                # Read and AES-decrypt the SecurityResult (4 bytes).
+                raw_sr73 = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
+                dec_sr73 = dec_ctx.update(raw_sr73)
+                sr73 = int.from_bytes(dec_sr73, "big")
+                print(f"[VNC {label}] DSM 0x73: SecurityResult raw={raw_sr73.hex()} "
+                      f"dec={dec_sr73.hex()} SR={sr73}")
+                if sr73 != 0:
+                    raise _DSMAuthFailure(f"DSM 0x73: SecurityResult={sr73} — auth rejected")
+                print(f"[VNC {label}] DSM 0x73: Auth OK!")
+                return enc_ctx, dec_ctx, b""
 
             if len(after_sub) >= key_size:
-                # Response structure: [22-byte fixed header][256-byte RSA ciphertext][leftover]
-                # The 22-byte header is identical across all connections (confirmed by observation).
+                # Response structure: [22-byte fixed header][key_size RSA ciphertext][leftover]
                 hdr_size = 22
                 encrypted_key = after_sub[hdr_size:hdr_size + key_size]
                 dsm_leftover_enc = after_sub[hdr_size + key_size:]
