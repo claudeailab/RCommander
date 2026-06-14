@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.72"
+APP_VERSION = "1.6.73"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1637,15 +1637,22 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     # force_sub_type=0: default behaviour (prefer 0x72 → else 0x73)
     _dsm_combos = [
         # (exponent, reverse_modulus, reverse_cipher, raw_rsa, force_sub_type)
-        # SecureVNCPlugin2 is OpenSSL-based (not Windows CryptoAPI).
-        # OpenSSL RSA_public_encrypt produces BE ciphertext; server uses RSA_private_decrypt (BE).
-        # Modulus is sent as raw 256-byte big-endian (LE gives even number → impossible RSA modulus).
-        # cipher=False → send Python's BE output as-is (no reversal).
-        (65537, True, False, False, 0x73),
+        # SecureVNCPlugin2 uses OpenSSL: RSA_public_encrypt (BE output), RSA_private_decrypt (BE input).
+        # Server sends raw 256-byte modulus in big-endian (BE first byte = MSB).
+        # reverse_modulus=False → always interpret as BE (don't try LE first — LE is wrong when MSB≥0x80,
+        # and when both are valid we still want BE for consistency across sessions).
+        # Try BE cipher first (OpenSSL convention), then LE cipher (Windows CryptoAPI convention).
+        (65537, False, False, False, 0x73),   # BE modulus, BE cipher (OpenSSL)
+        (65537, False, True,  False, 0x73),   # BE modulus, LE cipher (Windows)
     ]
     enc_ctx = dec_ctx = srv_pre_buf = None
     last_error = None
+    _combo_attempt = 0
     for _dsm_exp, _dsm_rev_mod, _dsm_rev_cip, _dsm_raw, _dsm_sub in _dsm_combos:
+        if _combo_attempt > 0:
+            # Brief pause between connection attempts to avoid server-side rate limiting.
+            await asyncio.sleep(5)
+        _combo_attempt += 1
         try:
             reader, writer = await asyncio.open_connection(session["host"], session["port"])
             sock = writer.transport.get_extra_info("socket")
