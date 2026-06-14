@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.75"
+APP_VERSION = "1.6.76"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1335,7 +1335,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             # For 0x72: server sends [22B header][key_size RSA-encrypted AES key][leftover].
             # Read in a loop until we have enough bytes or the server goes silent.
             after_sub = b""
-            need = 338 if chosen == 0x73 else (22 + key_size)
+            need = 340 if chosen == 0x73 else (22 + key_size)  # 22B hdr+256B mod+4B flags+~57B chal
             deadline = asyncio.get_event_loop().time() + 3.0
             while len(after_sub) < need and asyncio.get_event_loop().time() < deadline:
                 try:
@@ -1351,37 +1351,38 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
 
             if chosen == 0x73:
                 # Sub-type 0x73: UltraVNC SecureVNCPlugin2 "server key" mode.
-                # Server sends its RSA public key; we generate an AES session key,
-                # encrypt it with the server's public key, and send it back.
-                # Protocol (from ultravnc_dsm_helper disassembly):
-                #   recv: [22B plugin header][270B BER RSAPublicKey][4B flags][~42B RC4 challenge]
-                #   send: RSA_public_encrypt(16, aes_key, PKCS1_PADDING) [256B] + \x00\x00\x00
-                #   AES-128-OFB with aes_key, IV=zeros used for all subsequent traffic.
-                if len(after_sub) < 292:  # need at least 22+270 bytes
-                    raise ValueError(f"DSM 0x73: server reply too short ({len(after_sub)}B, need 292)")
+                # Wire format (observed from live traffic):
+                #   [22B plugin header][256B raw RSA modulus LE][4B flags][~57B RC4 challenge]
+                # The modulus is Windows CryptoAPI little-endian (LSB first), NOT DER/ASN.1.
+                # ssvnc internally wraps it into a 270B DER buffer, but the wire is raw 256B LE.
+                if len(after_sub) < 278:  # need at least 22+256 bytes
+                    raise ValueError(f"DSM 0x73: server reply too short ({len(after_sub)}B, need 278)")
                 hdr22 = after_sub[:22]
-                rsa_key_ber = bytearray(after_sub[22:292])  # 270 bytes BER RSAPublicKey
-                flags4 = after_sub[292:296] if len(after_sub) >= 296 else b""
-                rc4_chal = after_sub[296:] if len(after_sub) > 296 else b""
+                raw_mod_le = after_sub[22:278]   # 256 bytes, little-endian modulus
+                flags4 = after_sub[278:282] if len(after_sub) >= 282 else b""
+                rc4_chal = after_sub[282:] if len(after_sub) > 282 else b""
                 print(f"[VNC {label}] DSM 0x73: hdr={hdr22.hex()} "
-                      f"rsa_key[0]=0x{rsa_key_ber[0]:02x} flags={flags4.hex()} "
-                      f"challenge={len(rc4_chal)}B")
+                      f"mod_le[0]=0x{raw_mod_le[0]:02x} mod_le[-1]=0x{raw_mod_le[-1]:02x} "
+                      f"flags={flags4.hex()} challenge={len(rc4_chal)}B")
 
-                # Parse server's BER RSAPublicKey (0x10 SEQUENCE tag → fix to 0x30 for DER).
-                server_pub = _parse_rsapubkey_ber(bytes(rsa_key_ber))
-                srv_key_bytes = (server_pub.key_size + 7) // 8
-                print(f"[VNC {label}] DSM 0x73: server RSA key parsed, "
-                      f"key_size={server_pub.key_size}b")
+                # Build RSA public key from LE modulus (convert to big-endian integer).
+                from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+                server_n = int.from_bytes(raw_mod_le, "little")
+                if not (server_n & 1):
+                    raise ValueError(f"DSM 0x73: modulus is even — not a valid RSA key")
+                server_pub = RSAPublicNumbers(e=65537, n=server_n).public_key()
+                print(f"[VNC {label}] DSM 0x73: server RSA key parsed "
+                      f"({server_pub.key_size}b, n_msb=0x{raw_mod_le[-1]:02x})")
 
                 # Generate 16-byte AES-128 session key.
                 aes_key_73 = os.urandom(16)
                 aes_iv_73 = bytes(16)  # IV = all zeros
 
                 # RSA-encrypt the 16-byte AES key with the server's public key (PKCS#1 v1.5).
+                # OpenSSL RSA_public_encrypt produces big-endian output; server expects BE.
                 enc_aes_73 = server_pub.encrypt(aes_key_73, asym_padding.PKCS1v15())
-                # enc_aes_73 is srv_key_bytes long (256 for RSA-2048).
 
-                # Send: RSA-encrypted AES key + 3 null bytes (as observed in the binary).
+                # Send: 256-byte RSA-encrypted AES key + 3 null bytes (from binary analysis).
                 writer.write(enc_aes_73 + b"\x00\x00\x00")
                 await writer.drain()
                 print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B RSA-encrypted AES key "
