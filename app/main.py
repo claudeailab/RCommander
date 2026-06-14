@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.68"
+APP_VERSION = "1.6.69"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1176,7 +1176,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                                  dsm_exponent: int = 65537,
                                  dsm_reverse_modulus: bool = True,
                                  dsm_reverse_cipher: bool = False,
-                                 dsm_raw_rsa: bool = False):
+                                 dsm_raw_rsa: bool = False,
+                                 dsm_force_sub_type: int = 0):
     """
     Full server-side RFB handshake.  Handles version exchange, security type
     selection (type 17 UltraVNC-DSM, type 1 None, type 2 VNC-auth) and reads
@@ -1250,6 +1251,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         print(f"[VNC {label}] Type-17 greeting: {len(server_greeting)}B "
               f"hex={server_greeting.hex()}")
 
+        chosen = 0x72  # default: server sent key directly (pre-installed pubkey mode)
         if len(server_greeting) >= key_size:
             encrypted_key = server_greeting[:key_size]
             dsm_leftover_enc = server_greeting[key_size:]
@@ -1263,16 +1265,19 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
 
             # 0x73 = server sends its own RSA public key; client generates+encrypts AES key (Path B)
             # 0x72 = server encrypts AES key with our pre-configured public key (Path A)
-            # Prefer 0x73: server sends its pubkey regardless, and selecting it means
-            # the server waits for our encrypted key before streaming (no leftover).
-            if 0x73 in sub_types:
-                chosen = 0x73
+            # dsm_force_sub_type overrides the selection when non-zero.
+            if dsm_force_sub_type and dsm_force_sub_type in sub_types:
+                chosen = dsm_force_sub_type
+            elif dsm_force_sub_type:
+                chosen = dsm_force_sub_type  # try forced type even if not listed
             elif 0x72 in sub_types:
-                chosen = 0x72
+                chosen = 0x72  # prefer 0x72: server uses our installed pubkey (Path A)
+            elif 0x73 in sub_types:
+                chosen = 0x73
             elif sub_types:
                 chosen = sub_types[0]
             else:
-                chosen = 0x73
+                chosen = 0x72
             writer.write(bytes([chosen]))
             await writer.drain()
             print(f"[VNC {label}] DSM: sent sub-type 0x{chosen:02x}")
@@ -1357,6 +1362,16 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             except Exception as e:
                 print(f"[VNC {label}] DSM {ord_pfx}RAW failed: {e}")
 
+        # Add password-derived AES key candidates (in case server verifies key == f(password)).
+        if password:
+            import hashlib
+            pw_b = password.encode("utf-8")
+            pw_padded = (pw_b[:16] + b"\x00" * 16)[:16]
+            raw_candidates.insert(0, ("pw-md5", hashlib.md5(pw_b).digest()))
+            raw_candidates.insert(1, ("pw-sha1", hashlib.sha1(pw_b).digest()[:16]))
+            raw_candidates.insert(2, ("pw-sha256", hashlib.sha256(pw_b).digest()[:16]))
+            raw_candidates.insert(3, ("pw-raw", pw_padded))
+
         # Path A: probe each candidate — find the key that decrypts leftover SR to 0.
         # OFB keystream is data-independent, so we can probe without advancing real state.
         path_a_aes_key = None
@@ -1412,6 +1427,11 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             print(f"[VNC {label}] DSM AES tentative via Path A fallback (key={fallback_aes_key.hex()})")
             return enc_ctx, dec_ctx, dsm_leftover_dec
 
+        # In sub-type 0x72, the 256 bytes from the server is an encrypted AES key (Path A only).
+        # Path B (treating bytes as server RSA pubkey) makes no sense in that mode.
+        if chosen == 0x72:
+            raise _DSMAuthFailure(f"0x72 Path A exhausted — no valid AES key found in server payload")
+
         # Path B: treat encrypted_key as the SERVER's RSA public key modulus.
         # Windows CryptoAPI exports the modulus in little-endian (reversed) byte order.
         # We encrypt a random AES session key with the server's public key and send it.
@@ -1435,9 +1455,10 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 server_n = alt_n
                 actual_rev_mod = not dsm_reverse_modulus
             else:
-                raise _DSMAuthFailure(
-                    f"e={dsm_exponent}: both LE and BE modulus are even — not a valid RSA key"
-                )
+                # Both LE and BE are even — not a valid RSA modulus, but proceed anyway
+                # to reach the SecurityResult so we can read any server reason string.
+                print(f"[VNC {label}] DSM Path B: both LE and BE modulus are even "
+                      f"(not a valid RSA key) — proceeding anyway for diagnostics")
         try:
             path_b_aes_key = os.urandom(16)
             key_size = (server_n.bit_length() + 7) // 8
@@ -1571,26 +1592,23 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     await websocket.accept()
 
-    # DSM type-17: try all (exponent, mod-endian, cipher-endian, raw_rsa) Path-B combos.
-    # Path A (decrypt encrypted AES key with our private key) is tried first on each
-    # connection; if it succeeds the combo params are irrelevant. If Path A fails,
-    # Path B (server-pubkey mode) uses the combo. Each attempt needs a fresh TCP conn.
-    # _dsm_combos: (exponent, reverse_modulus, reverse_cipher, raw_rsa)
-    # Raw RSA combos first — UltraVNC SecureVNCPlugin2 uses unpadded RSA.
+    # DSM type-17: try sub-type 0x72 first (server uses our installed pubkey → Path A),
+    # then fall back to 0x73 (server sends its pubkey → Path B).
+    # Tuples: (exponent, reverse_modulus, reverse_cipher, raw_rsa, force_sub_type)
+    # force_sub_type=0x72: select 0x72, Path A only (server encrypts AES key with our pubkey)
+    # force_sub_type=0: default behaviour (prefer 0x72 → else 0x73)
     _dsm_combos = [
-        # (exponent, reverse_modulus, reverse_cipher, raw_rsa)
-        (65537, True,  True,  True),   # LE modulus, LE cipher, raw RSA — Windows CryptoAPI standard
-        (65537, True,  False, True),   # LE modulus, BE cipher, raw RSA
-        (65537, False, False, True),   # BE modulus, BE cipher, raw RSA
-        (65537, False, True,  True),   # BE modulus, LE cipher, raw RSA
-        (65537, True,  True,  False),  # LE modulus, LE cipher, PKCS1v15
-        (65537, True,  False, False),  # LE modulus, BE cipher, PKCS1v15
-        (65537, False, False, False),  # BE modulus, BE cipher, PKCS1v15
-        (65537, False, True,  False),  # BE modulus, LE cipher, PKCS1v15
+        # (exponent, reverse_modulus, reverse_cipher, raw_rsa, force_sub_type)
+        (65537, True,  True,  False, 0x72),  # 0x72: server uses our pubkey (Path A)
+        (65537, True,  True,  False, 0x73),  # 0x73: LE mod, LE cipher, PKCS1v15
+        (65537, True,  False, False, 0x73),  # 0x73: LE mod, BE cipher, PKCS1v15
+        (65537, True,  True,  True,  0x73),  # 0x73: LE mod, LE cipher, raw RSA
+        (65537, False, False, False, 0x73),  # 0x73: BE mod, BE cipher, PKCS1v15
+        (65537, False, False, True,  0x73),  # 0x73: BE mod, BE cipher, raw RSA
     ]
     enc_ctx = dec_ctx = srv_pre_buf = None
     last_error = None
-    for _dsm_exp, _dsm_rev_mod, _dsm_rev_cip, _dsm_raw in _dsm_combos:
+    for _dsm_exp, _dsm_rev_mod, _dsm_rev_cip, _dsm_raw, _dsm_sub in _dsm_combos:
         try:
             reader, writer = await asyncio.open_connection(session["host"], session["port"])
             sock = writer.transport.get_extra_info("socket")
@@ -1612,7 +1630,8 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
                 dsm_exponent=_dsm_exp,
                 dsm_reverse_modulus=_dsm_rev_mod,
                 dsm_reverse_cipher=_dsm_rev_cip,
-                dsm_raw_rsa=_dsm_raw)
+                dsm_raw_rsa=_dsm_raw,
+                dsm_force_sub_type=_dsm_sub)
             last_error = None
             break  # handshake succeeded
         except _DSMAuthFailure as e:
