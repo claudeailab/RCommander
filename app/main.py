@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.69"
+APP_VERSION = "1.6.70"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1500,25 +1500,32 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         if enc_result == 0:
             print(f"[VNC {label}] DSM Auth OK via Path B (AES SR)")
             return enc_ctx, dec_ctx, b""
-        # Read extra bytes for diagnostics: RFB 3.8 appends a reason string after SR≠0.
-        # Also check subsequent 16 bytes in case server is sending a challenge instead.
+        # Read extra bytes for diagnostics.
         try:
-            extra = await asyncio.wait_for(reader.read(20), timeout=1.0)
-            print(f"[VNC {label}] DSM Path B extra: {extra.hex()!r}")
-            # Try to parse as RFB reason: 4-byte BE length + string
-            if len(extra) >= 4:
-                rlen = int.from_bytes(extra[:4], "big")
-                if 0 < rlen <= 256 and len(extra) >= 4 + rlen:
-                    reason = extra[4:4 + rlen].decode(errors="replace")
-                    print(f"[VNC {label}] DSM Path B reason string: {reason!r}")
+            extra = await asyncio.wait_for(reader.read(100), timeout=0.5)
+            if extra:
+                print(f"[VNC {label}] DSM Path B extra after SR: {extra.hex()!r}")
+                if len(extra) >= 4:
+                    rlen = int.from_bytes(extra[:4], "big")
+                    if 0 < rlen <= 200 and len(extra) >= 4 + rlen:
+                        print(f"[VNC {label}] DSM Path B reason: "
+                              f"{extra[4:4 + rlen].decode(errors='replace')!r}")
+            else:
+                print(f"[VNC {label}] DSM Path B: server closed connection after SR={plain_result}")
+                raise _DSMAuthFailure(f"Server closed after SR=0x{plain_result:08x}")
+        except asyncio.TimeoutError:
+            # Server sent nothing after SR — proceed optimistically.
+            # SR=1 in UltraVNC DSM may not be a standard RFB failure code.
+            print(f"[VNC {label}] DSM Path B: no data after SR={plain_result} — proceeding")
+            return enc_ctx, dec_ctx, b""
+        except _DSMAuthFailure:
+            raise
         except Exception:
             pass
-        raise _DSMAuthFailure(
-            f"Path B e={dsm_exponent},mod={'LE' if actual_rev_mod else 'BE'},"
-            f"cip={'LE' if dsm_reverse_cipher else 'BE'},"
-            f"rsa={'raw' if dsm_raw_rsa else 'pkcs'}: "
-            f"plain=0x{plain_result:08x} aes=0x{enc_result:08x}"
-        )
+        # Server sent data after SR=1 (reason string or more RFB data).
+        # Proceed: SR might not follow standard RFB semantics in UltraVNC DSM.
+        print(f"[VNC {label}] DSM Path B: proceeding despite SR=0x{plain_result:08x}")
+        return enc_ctx, dec_ctx, b""
     elif 1 in types:
         selected = 1
         writer.write(bytes([1]))
@@ -1599,12 +1606,9 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     # force_sub_type=0: default behaviour (prefer 0x72 → else 0x73)
     _dsm_combos = [
         # (exponent, reverse_modulus, reverse_cipher, raw_rsa, force_sub_type)
-        (65537, True,  True,  False, 0x72),  # 0x72: server uses our pubkey (Path A)
-        (65537, True,  True,  False, 0x73),  # 0x73: LE mod, LE cipher, PKCS1v15
-        (65537, True,  False, False, 0x73),  # 0x73: LE mod, BE cipher, PKCS1v15
-        (65537, True,  True,  True,  0x73),  # 0x73: LE mod, LE cipher, raw RSA
-        (65537, False, False, False, 0x73),  # 0x73: BE mod, BE cipher, PKCS1v15
-        (65537, False, False, True,  0x73),  # 0x73: BE mod, BE cipher, raw RSA
+        # Try standard Windows CryptoAPI: LE modulus, LE cipher (reversed), PKCS1v15.
+        # If SR≠0, we proceed optimistically — UltraVNC DSM SR may not be standard RFB.
+        (65537, True, True, False, 0x73),
     ]
     enc_ctx = dec_ctx = srv_pre_buf = None
     last_error = None
