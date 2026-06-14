@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.70"
+APP_VERSION = "1.6.71"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1375,31 +1375,56 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         # Path A: probe each candidate — find the key that decrypts leftover SR to 0.
         # OFB keystream is data-independent, so we can probe without advancing real state.
         path_a_aes_key = None
+        path_a_iv = bytes(16)   # IV that produced SR=0
+        path_a_sr_offset = 0    # byte offset of SR within dsm_leftover_dec
         dsm_leftover_dec = b""
+        # Hypothesis: server frame = [22B header][256B key][16B IV][remaining]
+        # so dsm_leftover_enc[:16] is the AES-OFB IV and leftover[16:] is ciphertext.
+        _has_iv_prefix = len(dsm_leftover_enc) >= 20  # need at least IV(16) + SR(4)
+        _iv_prefix = dsm_leftover_enc[:16] if _has_iv_prefix else None
         for key_desc, key_bytes in raw_candidates:
             try:
+                # Standard probe: IV=zeros, SR at leftover[0:4]
                 probe = Cipher(algorithms.AES(key_bytes), _OFB(bytes(16))).decryptor()
                 dec_left = probe.update(dsm_leftover_enc) if dsm_leftover_enc else b""
                 sr = int.from_bytes(dec_left[:4], "big") if len(dec_left) >= 4 else -1
                 print(f"[VNC {label}] DSM key={key_desc} ({key_bytes.hex()[:16]}…) "
-                      f"leftover-SR=0x{sr:08x}")
+                      f"leftover-SR(IV=0)=0x{sr:08x}")
                 if sr == 0:
                     path_a_aes_key = key_bytes
+                    path_a_iv = bytes(16)
+                    path_a_sr_offset = 0
                     dsm_leftover_dec = dec_left
-                    print(f"[VNC {label}] DSM Auth OK via Path A ({key_desc})")
+                    print(f"[VNC {label}] DSM Auth OK via Path A ({key_desc}, IV=zeros)")
                     break
+                # IV-prefix probe: IV=leftover[:16], SR at leftover[16:20]
+                if _has_iv_prefix:
+                    probe2 = Cipher(algorithms.AES(key_bytes), _OFB(_iv_prefix)).decryptor()
+                    dec2 = probe2.update(dsm_leftover_enc[16:])
+                    sr2 = int.from_bytes(dec2[:4], "big") if len(dec2) >= 4 else -1
+                    print(f"[VNC {label}] DSM key={key_desc} ({key_bytes.hex()[:16]}…) "
+                          f"leftover-SR(IV=left[:16])=0x{sr2:08x}")
+                    if sr2 == 0:
+                        path_a_aes_key = key_bytes
+                        path_a_iv = _iv_prefix
+                        path_a_sr_offset = 16
+                        dsm_leftover_dec = dec2  # ciphertext after IV prefix, decrypted
+                        print(f"[VNC {label}] DSM Auth OK via Path A ({key_desc}, IV=leftover[:16])")
+                        break
             except Exception as e:
                 print(f"[VNC {label}] DSM probe {key_desc} failed: {e}")
 
         # If a candidate confirmed SR=0, use it and return.
         if path_a_aes_key is not None:
-            iv = bytes(16)
-            enc_ctx = Cipher(algorithms.AES(path_a_aes_key), _OFB(iv)).encryptor()
-            dec_ctx = Cipher(algorithms.AES(path_a_aes_key), _OFB(iv)).decryptor()
+            enc_ctx = Cipher(algorithms.AES(path_a_aes_key), _OFB(path_a_iv)).encryptor()
+            dec_ctx = Cipher(algorithms.AES(path_a_aes_key), _OFB(path_a_iv)).decryptor()
             if dsm_leftover_enc:
-                dec_ctx.update(bytes(len(dsm_leftover_enc)))
-            dsm_pre_buf = dsm_leftover_dec[4:]
-            print(f"[VNC {label}] DSM AES active via Path A (key={path_a_aes_key.hex()})")
+                # Fast-forward the decryptor past bytes already consumed by the probe.
+                consumed = len(dsm_leftover_enc) - path_a_sr_offset
+                dec_ctx.update(bytes(consumed))
+            dsm_pre_buf = dsm_leftover_dec[4:]  # bytes after the SR that belong to RFB stream
+            print(f"[VNC {label}] DSM AES active via Path A "
+                  f"(key={path_a_aes_key.hex()}, IV={path_a_iv.hex()})")
             return enc_ctx, dec_ctx, dsm_pre_buf
 
         # No candidate confirmed SR=0.
@@ -1484,7 +1509,10 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
               f"cipher={'LE' if dsm_reverse_cipher else 'BE'}, "
               f"rsa={'raw' if dsm_raw_rsa else 'PKCS1v15'}), "
               f"our AES key={path_b_aes_key.hex()}")
-        iv = bytes(16)
+        # Use leftover[:16] as IV if available (hypothesis: server embeds IV in leftover frame).
+        iv = dsm_leftover_enc[:16] if len(dsm_leftover_enc) >= 16 else bytes(16)
+        print(f"[VNC {label}] DSM Path B: IV={iv.hex()} "
+              f"(source={'leftover[:16]' if len(dsm_leftover_enc) >= 16 else 'zeros'})")
         enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(iv)).encryptor()
         dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(iv)).decryptor()
         print(f"[VNC {label}] DSM: discarding {len(dsm_leftover_enc)}B pre-exchange leftover")
