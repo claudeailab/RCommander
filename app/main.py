@@ -131,7 +131,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.71"
+APP_VERSION = "1.6.72"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1502,6 +1502,9 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 f"key/encrypt error: {key_err}"
             ) from key_err
         wire_cipher = encrypted_session[::-1] if dsm_reverse_cipher else encrypted_session
+        print(f"[VNC {label}] DSM Path B: wire_cipher first8={wire_cipher[:8].hex()} "
+              f"last8={wire_cipher[-8:].hex()} "
+              f"({'LE/reversed' if dsm_reverse_cipher else 'BE/as-is'})")
         writer.write(wire_cipher)
         await writer.drain()
         print(f"[VNC {label}] DSM Path B: sent {len(wire_cipher)}B encrypted session key "
@@ -1634,9 +1637,11 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     # force_sub_type=0: default behaviour (prefer 0x72 → else 0x73)
     _dsm_combos = [
         # (exponent, reverse_modulus, reverse_cipher, raw_rsa, force_sub_type)
-        # Try standard Windows CryptoAPI: LE modulus, LE cipher (reversed), PKCS1v15.
-        # If SR≠0, we proceed optimistically — UltraVNC DSM SR may not be standard RFB.
-        (65537, True, True, False, 0x73),
+        # SecureVNCPlugin2 is OpenSSL-based (not Windows CryptoAPI).
+        # OpenSSL RSA_public_encrypt produces BE ciphertext; server uses RSA_private_decrypt (BE).
+        # Modulus is sent as raw 256-byte big-endian (LE gives even number → impossible RSA modulus).
+        # cipher=False → send Python's BE output as-is (no reversal).
+        (65537, True, False, False, 0x73),
     ]
     enc_ctx = dec_ctx = srv_pre_buf = None
     last_error = None
