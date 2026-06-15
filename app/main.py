@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.77"
+APP_VERSION = "1.6.78"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1172,6 +1172,23 @@ class _DSMAuthFailure(Exception):
     """Raised when the VNC server returns SecurityResult != 0 for DSM type-17."""
 
 
+def _arc4(key: bytes, data: bytes) -> bytes:
+    """RC4 stream cipher (encrypt == decrypt)."""
+    S = list(range(256))
+    j = 0
+    for i in range(256):
+        j = (j + S[i] + key[i % len(key)]) & 0xff
+        S[i], S[j] = S[j], S[i]
+    out = []
+    i = j = 0
+    for b in data:
+        i = (i + 1) & 0xff
+        j = (j + S[i]) & 0xff
+        S[i], S[j] = S[j], S[i]
+        out.append(b ^ S[(S[i] + S[j]) & 0xff])
+    return bytes(out)
+
+
 def _parse_rsapubkey_ber(data: bytes):
     """
     Parse a BER/DER-encoded RSAPublicKey (SEQUENCE { INTEGER n, INTEGER e })
@@ -1374,12 +1391,22 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 print(f"[VNC {label}] DSM 0x73: server RSA key parsed "
                       f"({server_pub.key_size}b, n_lsb=0x{raw_mod[-1]:02x})")
 
-                # Generate 16-byte AES-128 session key.
-                aes_key_73 = os.urandom(16)
+                # Derive RC4 key from the server's RSA public key bytes (SHA1 of raw modulus).
+                rc4_key = hashlib.sha1(raw_mod).digest()  # 20 bytes
+                print(f"[VNC {label}] DSM 0x73: rc4_key={rc4_key.hex()} "
+                      f"challenge_raw={rc4_chal.hex()}")
+
+                # RC4-decrypt the challenge to recover the AES session key chosen by the server.
+                # Protocol: server generates AES key, encrypts with RC4(SHA1(pubkey)), sends it.
+                # Client decrypts → gets AES key → RSA-encrypts it back as proof of possession.
+                challenge_dec = _arc4(rc4_key, rc4_chal)
+                print(f"[VNC {label}] DSM 0x73: challenge_dec={challenge_dec.hex()}")
+
+                # AES-128 session key = first 16 bytes of decrypted challenge.
+                aes_key_73 = challenge_dec[:16]
                 aes_iv_73 = bytes(16)  # IV = all zeros
 
-                # RSA-encrypt the 16-byte AES key with the server's public key (PKCS#1 v1.5).
-                # OpenSSL RSA_public_encrypt produces big-endian output; server expects BE.
+                # RSA-encrypt the AES key with the server's public key (PKCS#1 v1.5 / OpenSSL BE).
                 enc_aes_73 = server_pub.encrypt(aes_key_73, asym_padding.PKCS1v15())
 
                 # Send: 256-byte RSA-encrypted AES key + 3 null bytes (from binary analysis).
@@ -1392,16 +1419,20 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 enc_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).encryptor()
                 dec_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).decryptor()
 
-                # Read and AES-decrypt the SecurityResult (4 bytes).
+                # Read SecurityResult (4 bytes) — may be plain RFB or AES-OFB encrypted.
                 raw_sr73 = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
                 dec_sr73 = dec_ctx.update(raw_sr73)
-                sr73 = int.from_bytes(dec_sr73, "big")
+                sr73_plain = int.from_bytes(raw_sr73, "big")
+                sr73_dec = int.from_bytes(dec_sr73, "big")
                 print(f"[VNC {label}] DSM 0x73: SecurityResult raw={raw_sr73.hex()} "
-                      f"dec={dec_sr73.hex()} SR={sr73}")
-                if sr73 != 0:
-                    raise _DSMAuthFailure(f"DSM 0x73: SecurityResult={sr73} — auth rejected")
-                print(f"[VNC {label}] DSM 0x73: Auth OK!")
-                return enc_ctx, dec_ctx, b""
+                      f"plain={sr73_plain} aes_dec={sr73_dec}")
+                if sr73_plain == 0 or sr73_dec == 0:
+                    ok_via = "plain" if sr73_plain == 0 else "AES"
+                    print(f"[VNC {label}] DSM 0x73: Auth OK! (SR=0 via {ok_via})")
+                    return enc_ctx, dec_ctx, b""
+                raise _DSMAuthFailure(
+                    f"DSM 0x73: SR plain={sr73_plain} aes_dec={sr73_dec} — auth rejected"
+                )
 
             if len(after_sub) >= key_size:
                 # Response structure: [22-byte fixed header][key_size RSA ciphertext][leftover]
