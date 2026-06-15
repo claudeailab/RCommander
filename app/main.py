@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.79"
+APP_VERSION = "1.6.80"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1523,7 +1523,6 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
 
         # Add password-derived AES key candidates (in case server verifies key == f(password)).
         if password:
-            import hashlib
             pw_b = password.encode("utf-8")
             pw_padded = (pw_b[:16] + b"\x00" * 16)[:16]
             raw_candidates.insert(0, ("pw-md5", hashlib.md5(pw_b).digest()))
