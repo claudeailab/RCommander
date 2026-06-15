@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.80"
+APP_VERSION = "1.6.81"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1234,6 +1234,59 @@ def _parse_rsapubkey_ber(data: bytes):
     return RSAPublicNumbers(e=e, n=n).public_key()
 
 
+async def _launch_securevnc_helper(host: str, port: int, label: str):
+    """
+    Launch ultravnc_dsm_helper in 'securevnc' mode as a local TCP proxy.
+    The helper connects to host:port, performs the RSA/AES key exchange
+    natively, and presents a plain (unencrypted) VNC stream on a local port.
+    Returns (reader, writer, proc) — caller must proc.terminate() on cleanup.
+    """
+    # Bind an ephemeral port to discover a free number, then release it.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        local_port = s.getsockname()[1]
+
+    # Delete any stale keystore so the helper always prompts to accept the
+    # (potentially ephemeral) server key, which we auto-answer "y".
+    keystore = f"/tmp/svnc_{local_port}.rsa"
+    try:
+        os.unlink(keystore)
+    except FileNotFoundError:
+        pass
+
+    env = {**os.environ, "ULTRAVNC_DSM_HELPER_NOIPV6": "1"}
+    proc = await asyncio.create_subprocess_exec(
+        "/usr/lib/ssvnc/ultravnc_dsm_helper",
+        "securevnc", keystore, str(local_port), f"{host}:{port}",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+
+    # Auto-answer "y" to the "save server key?" interactive prompt.
+    proc.stdin.write(b"y\n")
+    await proc.stdin.drain()
+
+    # Retry connecting until the helper has bound the port (up to ~3 s).
+    reader = writer = None
+    for delay in (0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0):
+        await asyncio.sleep(delay)
+        if proc.returncode is not None:
+            raise RuntimeError(f"DSM helper exited early (rc={proc.returncode})")
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", local_port)
+            break
+        except OSError:
+            pass
+    if writer is None:
+        proc.terminate()
+        raise RuntimeError(f"DSM helper never bound :{local_port}")
+
+    print(f"[VNC {label}] DSM helper proxying :{local_port} → {host}:{port}")
+    return reader, writer, proc
+
+
 async def _server_rfb_handshake(reader, writer, client_key_path: str,
                                  password: str, label: str,
                                  dsm_exponent: int = 65537,
@@ -1788,73 +1841,31 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     await websocket.accept()
 
-    # DSM type-17: try sub-type 0x72 first (server uses our installed pubkey → Path A),
-    # then fall back to 0x73 (server sends its pubkey → Path B).
-    # Tuples: (exponent, reverse_modulus, reverse_cipher, raw_rsa, force_sub_type)
-    # force_sub_type=0x72: select 0x72, Path A only (server encrypts AES key with our pubkey)
-    # force_sub_type=0: default behaviour (prefer 0x72 → else 0x73)
-    _dsm_combos = [
-        # (exponent, reverse_modulus, reverse_cipher, raw_rsa, force_sub_type)
-        # SecureVNCPlugin2 uses OpenSSL: RSA_public_encrypt (BE output), RSA_private_decrypt (BE input).
-        # Server sends raw 256-byte modulus in big-endian (first byte = MSB).
-        # SINGLE combo only — multiple attempts trigger server-side IP blacklisting.
-        (65537, False, False, False, 0x73),   # BE modulus, BE cipher (OpenSSL convention)
-    ]
-    enc_ctx = dec_ctx = srv_pre_buf = None
-    last_error = None
-    _combo_attempt = 0
-    for _dsm_exp, _dsm_rev_mod, _dsm_rev_cip, _dsm_raw, _dsm_sub in _dsm_combos:
-        if _combo_attempt > 0:
-            # Brief pause between connection attempts to avoid server-side rate limiting.
-            await asyncio.sleep(5)
-        _combo_attempt += 1
-        try:
+    # Phase 1: connect to VNC server (via DSM helper subprocess if DSM key configured)
+    helper_proc = None
+    try:
+        if client_key_path:
+            # UltraVNC DSM/SecureVNCPlugin2: delegate all auth to ultravnc_dsm_helper.
+            # Helper performs RSA key exchange and presents plain RFB on a local port.
+            reader, writer, helper_proc = await _launch_securevnc_helper(
+                session["host"], session["port"], host_label)
+            enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
+                reader, writer, None, password, host_label)
+        else:
             reader, writer = await asyncio.open_connection(session["host"], session["port"])
             sock = writer.transport.get_extra_info("socket")
             if sock:
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             print(f"[VNC {host_label}] TCP connected")
-        except Exception as e:
-            print(f"[VNC {host_label}] TCP connect failed: {e}")
-            try:
-                await websocket.close()
-            except Exception:
-                pass
-            return
-
-        # Phase 1: full RFB handshake with the real VNC server
-        try:
             enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
-                reader, writer, client_key_path, password, host_label,
-                dsm_exponent=_dsm_exp,
-                dsm_reverse_modulus=_dsm_rev_mod,
-                dsm_reverse_cipher=_dsm_rev_cip,
-                dsm_raw_rsa=_dsm_raw,
-                dsm_force_sub_type=_dsm_sub)
-            last_error = None
-            break  # handshake succeeded
-        except _DSMAuthFailure as e:
-            last_error = e
-            print(f"[VNC {host_label}] DSM combo failed: {e}")
+                reader, writer, None, password, host_label)
+    except Exception as e:
+        print(f"[VNC {host_label}] Connection/handshake failed: {e}")
+        if helper_proc:
             try:
-                writer.close()
+                helper_proc.terminate()
             except Exception:
                 pass
-            continue  # try next combo
-        except Exception as e:
-            print(f"[VNC {host_label}] Server handshake failed: {e}")
-            try:
-                writer.close()
-            except Exception:
-                pass
-            try:
-                await websocket.close()
-            except Exception:
-                pass
-            return
-
-    if last_error is not None:
-        print(f"[VNC {host_label}] All DSM combos exhausted: {last_error}")
         try:
             await websocket.close()
         except Exception:
@@ -1920,6 +1931,11 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     for t in tasks:
         t.cancel()
     writer.close()
+    if helper_proc:
+        try:
+            helper_proc.terminate()
+        except Exception:
+            pass
     print(f"[VNC {host_label}] proxy closed")
     try:
         await websocket.close()
