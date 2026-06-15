@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.76"
+APP_VERSION = "1.6.77"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1358,21 +1358,21 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 if len(after_sub) < 278:  # need at least 22+256 bytes
                     raise ValueError(f"DSM 0x73: server reply too short ({len(after_sub)}B, need 278)")
                 hdr22 = after_sub[:22]
-                raw_mod_le = after_sub[22:278]   # 256 bytes, little-endian modulus
+                raw_mod = after_sub[22:278]   # 256 bytes, little-endian modulus
                 flags4 = after_sub[278:282] if len(after_sub) >= 282 else b""
                 rc4_chal = after_sub[282:] if len(after_sub) > 282 else b""
                 print(f"[VNC {label}] DSM 0x73: hdr={hdr22.hex()} "
-                      f"mod_le[0]=0x{raw_mod_le[0]:02x} mod_le[-1]=0x{raw_mod_le[-1]:02x} "
+                      f"mod_le[0]=0x{raw_mod[0]:02x} mod_le[-1]=0x{raw_mod[-1]:02x} "
                       f"flags={flags4.hex()} challenge={len(rc4_chal)}B")
 
-                # Build RSA public key from LE modulus (convert to big-endian integer).
+                # Build RSA public key from BE modulus (OpenSSL convention).
                 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-                server_n = int.from_bytes(raw_mod_le, "little")
+                server_n = int.from_bytes(raw_mod, "big")
                 if not (server_n & 1):
                     raise ValueError(f"DSM 0x73: modulus is even — not a valid RSA key")
                 server_pub = RSAPublicNumbers(e=65537, n=server_n).public_key()
                 print(f"[VNC {label}] DSM 0x73: server RSA key parsed "
-                      f"({server_pub.key_size}b, n_msb=0x{raw_mod_le[-1]:02x})")
+                      f"({server_pub.key_size}b, n_lsb=0x{raw_mod[-1]:02x})")
 
                 # Generate 16-byte AES-128 session key.
                 aes_key_73 = os.urandom(16)
