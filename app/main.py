@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.78"
+APP_VERSION = "1.6.79"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1368,37 +1368,56 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
 
             if chosen == 0x73:
                 # Sub-type 0x73: UltraVNC SecureVNCPlugin2 "server key" mode.
-                # Wire format (observed from live traffic):
-                #   [22B plugin header][256B raw RSA modulus LE][4B flags][~57B RC4 challenge]
-                # The modulus is Windows CryptoAPI little-endian (LSB first), NOT DER/ASN.1.
-                # ssvnc internally wraps it into a 270B DER buffer, but the wire is raw 256B LE.
-                if len(after_sub) < 278:  # need at least 22+256 bytes
-                    raise ValueError(f"DSM 0x73: server reply too short ({len(after_sub)}B, need 278)")
+                if len(after_sub) < 283:  # need at least 22+256+4+1 bytes
+                    raise ValueError(f"DSM 0x73: server reply too short ({len(after_sub)}B)")
                 hdr22 = after_sub[:22]
-                raw_mod = after_sub[22:278]   # 256 bytes, little-endian modulus
-                flags4 = after_sub[278:282] if len(after_sub) >= 282 else b""
-                rc4_chal = after_sub[282:] if len(after_sub) > 282 else b""
-                print(f"[VNC {label}] DSM 0x73: hdr={hdr22.hex()} "
-                      f"mod_le[0]=0x{raw_mod[0]:02x} mod_le[-1]=0x{raw_mod[-1]:02x} "
-                      f"flags={flags4.hex()} challenge={len(rc4_chal)}B")
+                # Print diagnostic hex to determine the exact structure.
+                print(f"[VNC {label}] DSM 0x73: total={len(after_sub)}B "
+                      f"hdr={hdr22.hex()}")
+                print(f"[VNC {label}] DSM 0x73: data[22:86]={after_sub[22:86].hex()}")
+                print(f"[VNC {label}] DSM 0x73: data[-30:]={after_sub[-30:].hex()}")
 
-                # Build RSA public key from BE modulus (OpenSSL convention).
+                # Scan offsets 22-26 for a 256-byte big-endian value with odd LSB
+                # (RSA moduli are always odd since they are products of two odd primes).
                 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-                server_n = int.from_bytes(raw_mod, "big")
-                if not (server_n & 1):
-                    raise ValueError(f"DSM 0x73: modulus is even — not a valid RSA key")
-                server_pub = RSAPublicNumbers(e=65537, n=server_n).public_key()
-                print(f"[VNC {label}] DSM 0x73: server RSA key parsed "
-                      f"({server_pub.key_size}b, n_lsb=0x{raw_mod[-1]:02x})")
+                server_pub = None
+                raw_mod = b""
+                flags4 = b""
+                rc4_chal = b""
+                for _off in range(22, 28):
+                    if len(after_sub) < _off + 256 + 4 + 1:
+                        continue
+                    _cand = after_sub[_off:_off + 256]
+                    _n = int.from_bytes(_cand, "big")
+                    _odd = bool(_n & 1)
+                    _msb = _cand[0]
+                    print(f"[VNC {label}] DSM 0x73: try offset={_off} "
+                          f"msb=0x{_msb:02x} lsb=0x{_cand[-1]:02x} odd={_odd}")
+                    if _odd:
+                        try:
+                            server_pub = RSAPublicNumbers(e=65537, n=_n).public_key()
+                            raw_mod = _cand
+                            flags4 = after_sub[_off + 256:_off + 260]
+                            rc4_chal = after_sub[_off + 260:]
+                            print(f"[VNC {label}] DSM 0x73: using offset={_off} "
+                                  f"key={server_pub.key_size}b flags={flags4.hex()} "
+                                  f"challenge={len(rc4_chal)}B")
+                            break
+                        except Exception as _ke:
+                            print(f"[VNC {label}] DSM 0x73: offset={_off} key err: {_ke}")
+                            server_pub = None
 
-                # Derive RC4 key from the server's RSA public key bytes (SHA1 of raw modulus).
+                if server_pub is None:
+                    raise ValueError(f"DSM 0x73: no valid RSA modulus found at offsets 22-27")
+
+                # Derive RC4 key = SHA1(raw 256-byte server modulus).
                 rc4_key = hashlib.sha1(raw_mod).digest()  # 20 bytes
                 print(f"[VNC {label}] DSM 0x73: rc4_key={rc4_key.hex()} "
                       f"challenge_raw={rc4_chal.hex()}")
 
-                # RC4-decrypt the challenge to recover the AES session key chosen by the server.
-                # Protocol: server generates AES key, encrypts with RC4(SHA1(pubkey)), sends it.
-                # Client decrypts → gets AES key → RSA-encrypts it back as proof of possession.
+                # RC4-decrypt the challenge to recover the AES session key sent by the server.
+                # Protocol: server RC4-encrypts its chosen AES key with key=SHA1(pubkey_bytes)
+                # and puts it in the challenge. Client decrypts → RSA-encrypts back as proof.
                 challenge_dec = _arc4(rc4_key, rc4_chal)
                 print(f"[VNC {label}] DSM 0x73: challenge_dec={challenge_dec.hex()}")
 
@@ -1406,20 +1425,20 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 aes_key_73 = challenge_dec[:16]
                 aes_iv_73 = bytes(16)  # IV = all zeros
 
-                # RSA-encrypt the AES key with the server's public key (PKCS#1 v1.5 / OpenSSL BE).
+                # RSA-encrypt the AES key with the server's public key (PKCS#1 v1.5, BE).
                 enc_aes_73 = server_pub.encrypt(aes_key_73, asym_padding.PKCS1v15())
 
-                # Send: 256-byte RSA-encrypted AES key + 3 null bytes (from binary analysis).
+                # Send: RSA-encrypted AES key + 3 null bytes (from binary analysis).
                 writer.write(enc_aes_73 + b"\x00\x00\x00")
                 await writer.drain()
                 print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B RSA-encrypted AES key "
                       f"+ 3 null bytes; aes_key={aes_key_73.hex()} iv=zeros")
 
-                # Set up AES-128-OFB cipher contexts (separate instances for enc and dec).
+                # Set up AES-128-OFB cipher contexts.
                 enc_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).encryptor()
                 dec_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).decryptor()
 
-                # Read SecurityResult (4 bytes) — may be plain RFB or AES-OFB encrypted.
+                # Read SecurityResult (4 bytes) — plain RFB or AES-OFB encrypted.
                 raw_sr73 = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
                 dec_sr73 = dec_ctx.update(raw_sr73)
                 sr73_plain = int.from_bytes(raw_sr73, "big")
