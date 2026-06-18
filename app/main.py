@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import pty
 import secrets
 import socket
 import time
@@ -132,7 +133,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.81"
+APP_VERSION = "1.6.82"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1239,41 +1240,61 @@ async def _launch_securevnc_helper(host: str, port: int, label: str):
     Launch ultravnc_dsm_helper in 'securevnc' mode as a local TCP proxy.
     The helper connects to host:port, performs the RSA/AES key exchange
     natively, and presents a plain (unencrypted) VNC stream on a local port.
-    Returns (reader, writer, proc) — caller must proc.terminate() on cleanup.
+    Returns (reader, writer, proc, master_fd) — caller must proc.terminate()
+    and os.close(master_fd) on cleanup.
     """
     # Bind an ephemeral port to discover a free number, then release it.
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         local_port = s.getsockname()[1]
 
-    # Delete any stale keystore so the helper always prompts to accept the
-    # (potentially ephemeral) server key, which we auto-answer "y".
-    keystore = f"/tmp/svnc_{local_port}.rsa"
+    # Stable keystore per host:port — helper saves key on first run and reuses
+    # on subsequent runs (no re-prompt as long as the server key is unchanged).
+    safe_host = host.replace(":", "_")
+    keystore = f"/tmp/svnc_{safe_host}_{port}.rsa"
+
+    # Allocate a PTY so the helper thinks it has a terminal.  Some builds of
+    # ultravnc_dsm_helper open /dev/tty for the "save key?" prompt instead of
+    # reading from stdin; a PTY satisfies both paths.  We pre-feed "y\n" to the
+    # master side so the answer is ready as soon as the helper reads it.
+    master_fd, slave_fd = pty.openpty()
     try:
-        os.unlink(keystore)
-    except FileNotFoundError:
+        os.write(master_fd, b"y\n")
+    except OSError:
         pass
 
     env = {**os.environ, "ULTRAVNC_DSM_HELPER_NOIPV6": "1"}
-    proc = await asyncio.create_subprocess_exec(
-        "/usr/lib/ssvnc/ultravnc_dsm_helper",
-        "securevnc", keystore, str(local_port), f"{host}:{port}",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/lib/ssvnc/ultravnc_dsm_helper",
+            "securevnc", keystore, str(local_port), f"{host}:{port}",
+            stdin=slave_fd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+    finally:
+        # Parent doesn't need the slave end; close it so the helper gets EOF
+        # on the PTY when it's done reading (not strictly required but clean).
+        os.close(slave_fd)
 
-    # Auto-answer "y" to the "save server key?" interactive prompt.
-    proc.stdin.write(b"y\n")
-    await proc.stdin.drain()
-
-    # Retry connecting until the helper has bound the port (up to ~3 s).
+    # Retry connecting until the helper has bound the port (up to ~4 s).
     reader = writer = None
-    for delay in (0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0):
+    for delay in (0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.2):
         await asyncio.sleep(delay)
         if proc.returncode is not None:
-            raise RuntimeError(f"DSM helper exited early (rc={proc.returncode})")
+            out_b = b""
+            err_b = b""
+            try:
+                out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+            except Exception:
+                pass
+            os.close(master_fd)
+            raise RuntimeError(
+                f"DSM helper exited early (rc={proc.returncode}) "
+                f"stdout={out_b.decode(errors='replace')!r} "
+                f"stderr={err_b.decode(errors='replace')!r}"
+            )
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", local_port)
             break
@@ -1281,10 +1302,11 @@ async def _launch_securevnc_helper(host: str, port: int, label: str):
             pass
     if writer is None:
         proc.terminate()
+        os.close(master_fd)
         raise RuntimeError(f"DSM helper never bound :{local_port}")
 
     print(f"[VNC {label}] DSM helper proxying :{local_port} → {host}:{port}")
-    return reader, writer, proc
+    return reader, writer, proc, master_fd
 
 
 async def _server_rfb_handshake(reader, writer, client_key_path: str,
@@ -1843,11 +1865,12 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     # Phase 1: connect to VNC server (via DSM helper subprocess if DSM key configured)
     helper_proc = None
+    helper_master_fd = -1
     try:
         if client_key_path:
             # UltraVNC DSM/SecureVNCPlugin2: delegate all auth to ultravnc_dsm_helper.
             # Helper performs RSA key exchange and presents plain RFB on a local port.
-            reader, writer, helper_proc = await _launch_securevnc_helper(
+            reader, writer, helper_proc, helper_master_fd = await _launch_securevnc_helper(
                 session["host"], session["port"], host_label)
             enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
                 reader, writer, None, password, host_label)
@@ -1860,11 +1883,22 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
             enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
                 reader, writer, None, password, host_label)
     except Exception as e:
-        print(f"[VNC {host_label}] Connection/handshake failed: {e}")
+        print(f"[VNC {host_label}] Connection/handshake failed ({type(e).__name__}): {e}")
         if helper_proc:
             try:
                 helper_proc.terminate()
+                await asyncio.sleep(0.2)
+                out, err = await helper_proc.communicate()
+                if out:
+                    print(f"[VNC {host_label}] DSM helper stdout: {out.decode(errors='replace')!r}")
+                if err:
+                    print(f"[VNC {host_label}] DSM helper stderr: {err.decode(errors='replace')!r}")
             except Exception:
+                pass
+        if helper_master_fd >= 0:
+            try:
+                os.close(helper_master_fd)
+            except OSError:
                 pass
         try:
             await websocket.close()
@@ -1935,6 +1969,11 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         try:
             helper_proc.terminate()
         except Exception:
+            pass
+    if helper_master_fd >= 0:
+        try:
+            os.close(helper_master_fd)
+        except OSError:
             pass
     print(f"[VNC {host_label}] proxy closed")
     try:
