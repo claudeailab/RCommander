@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.83"
+APP_VERSION = "1.6.84"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1355,7 +1355,12 @@ async def _launch_securevnc_helper(host: str, port: int, label: str):
             f.write(der)
         print(f"[VNC {label}] Keystore written: {keystore} ({len(der)}B)")
 
-    env = {**os.environ, "ULTRAVNC_DSM_HELPER_NOIPV6": "1"}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("DISPLAY", "XAUTHORITY")}
+    env["ULTRAVNC_DSM_HELPER_NOIPV6"] = "1"
+    print(f"[VNC {label}] Launching DSM helper "
+          f"(DISPLAY was {'set' if 'DISPLAY' in os.environ else 'unset'}, "
+          f"keystore {'exists' if os.path.exists(keystore) else 'missing'})")
     proc = await asyncio.create_subprocess_exec(
         "/usr/lib/ssvnc/ultravnc_dsm_helper",
         "securevnc", keystore, str(local_port), f"{host}:{port}",
@@ -1390,6 +1395,27 @@ async def _launch_securevnc_helper(host: str, port: int, label: str):
         proc.terminate()
         raise RuntimeError(f"DSM helper never bound :{local_port}")
 
+    # Drain any stderr the helper has printed up to this point (diagnostic).
+    for _ in range(5):
+        await asyncio.sleep(0.5)
+        try:
+            err_chunk = await asyncio.wait_for(proc.stderr.read(4096), timeout=0.05)
+            if err_chunk:
+                print(f"[VNC {label}] DSM helper stderr: {err_chunk.decode(errors='replace')!r}")
+        except (asyncio.TimeoutError, Exception):
+            pass
+        if proc.returncode is not None:
+            out_b, err_b = b"", b""
+            try:
+                out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"DSM helper exited (rc={proc.returncode}) "
+                f"stdout={out_b.decode(errors='replace')!r} "
+                f"stderr={err_b.decode(errors='replace')!r}"
+            )
+
     print(f"[VNC {label}] DSM helper proxying :{local_port} → {host}:{port}")
     return reader, writer, proc
 
@@ -1408,7 +1434,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
     Raises ValueError on any failure that should abort the connection.
     """
     # --- version exchange ---
-    sv = await asyncio.wait_for(reader.readexactly(12), timeout=10.0)
+    sv = await asyncio.wait_for(reader.readexactly(12), timeout=30.0)
     if not sv.startswith(b"RFB "):
         raise ValueError(f"Expected RFB banner, got {sv!r}")
     try:
