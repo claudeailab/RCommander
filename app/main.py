@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.90"
+APP_VERSION = "1.6.91"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1127,6 +1127,7 @@ def create_vnc_session(data: VncSessionIn):
         _vnc_sessions[token] = {
             "host": server.host,
             "port": data.port,
+            "username": cred.username or "" if cred else "",
             "password": cred.password or "" if cred else "",
             "name": server.name,
             "ts": time.time(),
@@ -1382,6 +1383,7 @@ async def _launch_securevnc_helper(host: str, port: int, label: str,
 
 async def _server_rfb_handshake(reader, writer, client_key_path: str,
                                  password: str, label: str,
+                                 username: str = "",
                                  dsm_exponent: int = 65537,
                                  dsm_reverse_modulus: bool = True,
                                  dsm_reverse_cipher: bool = False,
@@ -1679,14 +1681,25 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             except Exception as e:
                 print(f"[VNC {label}] DSM {ord_pfx}RAW failed: {e}")
 
-        # Add password-derived AES key candidates (in case server verifies key == f(password)).
-        if password:
-            pw_b = password.encode("utf-8")
+        # Add password-derived and username-derived AES key candidates.
+        if password or username:
+            pw_b = password.encode("utf-8") if password else b""
+            un_b = username.encode("utf-8") if username else b""
             pw_padded = (pw_b[:16] + b"\x00" * 16)[:16]
-            raw_candidates.insert(0, ("pw-md5", hashlib.md5(pw_b).digest()))
-            raw_candidates.insert(1, ("pw-sha1", hashlib.sha1(pw_b).digest()[:16]))
-            raw_candidates.insert(2, ("pw-sha256", hashlib.sha256(pw_b).digest()[:16]))
-            raw_candidates.insert(3, ("pw-raw", pw_padded))
+            insert_pos = 0
+            if password:
+                raw_candidates.insert(insert_pos, ("pw-md5", hashlib.md5(pw_b).digest())); insert_pos += 1
+                raw_candidates.insert(insert_pos, ("pw-sha1", hashlib.sha1(pw_b).digest()[:16])); insert_pos += 1
+                raw_candidates.insert(insert_pos, ("pw-sha256", hashlib.sha256(pw_b).digest()[:16])); insert_pos += 1
+                raw_candidates.insert(insert_pos, ("pw-raw", pw_padded)); insert_pos += 1
+            if username and password:
+                up_b = un_b + b":" + pw_b
+                raw_candidates.insert(insert_pos, ("up-md5", hashlib.md5(up_b).digest())); insert_pos += 1
+                raw_candidates.insert(insert_pos, ("up-sha1", hashlib.sha1(up_b).digest()[:16])); insert_pos += 1
+                raw_candidates.insert(insert_pos, ("up-sha256", hashlib.sha256(up_b).digest()[:16])); insert_pos += 1
+                raw_candidates.insert(insert_pos, ("pu-md5", hashlib.md5(pw_b + un_b).digest())); insert_pos += 1
+            if username:
+                raw_candidates.insert(insert_pos, ("un-md5", hashlib.md5(un_b).digest()))
 
         # Path A: probe each candidate — find the key that decrypts leftover SR to 0.
         # OFB keystream is data-independent, so we can probe without advancing real state.
@@ -1893,53 +1906,135 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             _pb_iv_list.append(("leftover[:16]", dsm_leftover_enc[:16]))
         if _dsm_hdr16 and _dsm_hdr16 != bytes(16):
             _pb_iv_list.append(("hdr[-16:]", _dsm_hdr16))
-        print(f"[VNC {label}] DSM Path B: discarding {len(dsm_leftover_enc)}B pre-exchange leftover")
-        raw = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
-        plain_result = int.from_bytes(raw, "big")
-        print(f"[VNC {label}] DSM Path B: SecurityResult raw={raw.hex()} plain=0x{plain_result:08x}")
-        if plain_result == 0:
-            enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).encryptor()
-            dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).decryptor()
-            print(f"[VNC {label}] DSM Auth OK via Path B (plain SR)")
-            return enc_ctx, dec_ctx, b""
-        for _iv_desc, _pb_iv in _pb_iv_list:
-            _dec_sr = Cipher(algorithms.AES(path_b_aes_key), _OFB(_pb_iv)).decryptor().update(raw)
-            _enc_result = int.from_bytes(_dec_sr, "big")
-            print(f"[VNC {label}] DSM Path B: SR(IV={_iv_desc}) aes_dec=0x{_enc_result:08x}")
-            if _enc_result == 0:
-                enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_pb_iv)).encryptor()
-                dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_pb_iv)).decryptor()
-                dec_ctx.update(raw)  # advance past SR bytes already consumed
-                print(f"[VNC {label}] DSM Auth OK via Path B (AES SR, IV={_iv_desc})")
+        print(f"[VNC {label}] DSM Path B: discarding {len(dsm_leftover_enc)}B pre-exchange leftover, "
+              f"waiting for server response (username={'set' if username else 'not set'})")
+        # Read the server response — may be a 4-byte SecurityResult OR a MS-Logon
+        # DH challenge (24B for 64-bit DH, 48B for 128-bit DH).  Read greedily
+        # to capture whatever the server sends before making a decision.
+        pb_resp = b""
+        _pb_deadline = asyncio.get_event_loop().time() + 6.0
+        while len(pb_resp) < 4 and asyncio.get_event_loop().time() < _pb_deadline:
+            try:
+                _chunk = await asyncio.wait_for(reader.read(256), timeout=2.0)
+                if not _chunk:
+                    break
+                pb_resp += _chunk
+            except asyncio.TimeoutError:
+                break
+        print(f"[VNC {label}] DSM Path B: server replied {len(pb_resp)}B "
+              f"hex={pb_resp[:48].hex()!r}")
+        if not pb_resp:
+            raise _DSMAuthFailure("Path B: server sent nothing after key exchange (timeout)")
+
+        # Helper: build AES contexts with IV from _pb_iv_list and check if
+        # decrypted first 4 bytes == 0x00000000 (SecurityResult = OK).
+        def _pb_check_sr(buf4: bytes):
+            plain = int.from_bytes(buf4, "big")
+            if plain == 0:
+                return bytes(16), True
+            for _iv_desc, _pb_iv in _pb_iv_list:
+                _dec = Cipher(algorithms.AES(path_b_aes_key), _OFB(_pb_iv)).decryptor().update(buf4)
+                if int.from_bytes(_dec, "big") == 0:
+                    print(f"[VNC {label}] DSM Path B: SR=0 via AES(IV={_iv_desc})")
+                    return _pb_iv, True
+            return None, False
+
+        # --- case 1: exactly 4 bytes → SecurityResult ---
+        if len(pb_resp) == 4:
+            _iv, _ok = _pb_check_sr(pb_resp)
+            if _ok:
+                enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_iv)).encryptor()
+                dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_iv)).decryptor()
+                dec_ctx.update(pb_resp)
+                print(f"[VNC {label}] DSM Auth OK via Path B (SR=0)")
                 return enc_ctx, dec_ctx, b""
-        # Read extra bytes for diagnostics.
-        try:
-            extra = await asyncio.wait_for(reader.read(100), timeout=0.5)
-            if extra:
-                print(f"[VNC {label}] DSM Path B extra after SR: {extra.hex()!r}")
-                if len(extra) >= 4:
-                    rlen = int.from_bytes(extra[:4], "big")
-                    if 0 < rlen <= 200 and len(extra) >= 4 + rlen:
-                        print(f"[VNC {label}] DSM Path B reason: "
-                              f"{extra[4:4 + rlen].decode(errors='replace')!r}")
-            else:
-                print(f"[VNC {label}] DSM Path B: server closed connection after SR={plain_result}")
-                raise _DSMAuthFailure(f"Server closed after SR=0x{plain_result:08x}")
-        except asyncio.TimeoutError:
-            # Server sent nothing after SR — proceed optimistically.
-            print(f"[VNC {label}] DSM Path B: no data after SR={plain_result} — proceeding")
+            plain_sr = int.from_bytes(pb_resp, "big")
+            raise _DSMAuthFailure(f"Path B: SR=0x{plain_sr:08x} (auth rejected)")
+
+        # --- case 2: 24 bytes → UltraVNC MS-Logon I DH challenge (64-bit) ---
+        if len(pb_resp) == 24 and username:
+            print(f"[VNC {label}] DSM Path B: 24B response — attempting MS-Logon I DH")
+            _gen  = int.from_bytes(pb_resp[0:8],  "big")
+            _mod  = int.from_bytes(pb_resp[8:16], "big")
+            _spub = int.from_bytes(pb_resp[16:24], "big")
+            print(f"[VNC {label}] MS-Logon I: gen=0x{_gen:016x} mod=0x{_mod:016x} "
+                  f"spub=0x{_spub:016x}")
+            _cpriv = int.from_bytes(os.urandom(8), "big") | 1
+            _cpub  = pow(_gen, _cpriv, _mod) if _mod > 1 else 0
+            _shared = pow(_spub, _cpriv, _mod) if _mod > 1 else 0
+            writer.write(_cpub.to_bytes(8, "big"))
+            await writer.drain()
+            _des_key = _shared.to_bytes(8, "big")
+            import warnings as _w
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                from cryptography.hazmat.primitives.ciphers.algorithms import DES as _DES_ALG
+            _user_pad = (username.encode("utf-8") + b"\x00" * 256)[:256]
+            _pass_pad = (password.encode("utf-8") + b"\x00" * 64)[:64]
+            _enc_user = Cipher(_DES_ALG(_des_key), modes.ECB()).encryptor().update(_user_pad)
+            _enc_pass = Cipher(_DES_ALG(_des_key), modes.ECB()).encryptor().update(_pass_pad)
+            writer.write(_enc_user + _enc_pass)
+            await writer.drain()
+            print(f"[VNC {label}] MS-Logon I: sent cpub + enc_user(256B) + enc_pass(64B)")
+            _sr_raw = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
+            _sr_plain = int.from_bytes(_sr_raw, "big")
+            print(f"[VNC {label}] MS-Logon I: SR={_sr_plain} raw={_sr_raw.hex()}")
+            if _sr_plain != 0:
+                raise _DSMAuthFailure(f"MS-Logon I rejected: SR=0x{_sr_plain:08x}")
+            # After MS-Logon, the DSM AES cipher is used for the RFB stream.
             enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).encryptor()
             dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).decryptor()
+            print(f"[VNC {label}] MS-Logon I Auth OK")
             return enc_ctx, dec_ctx, b""
-        except _DSMAuthFailure:
-            raise
-        except Exception:
-            pass
-        # Server sent data after SR=1 (reason string or more RFB data).
-        # Proceed: SR might not follow standard RFB semantics in UltraVNC DSM.
+
+        # --- case 3: 48 bytes → UltraVNC MS-Logon II DH challenge (128-bit) ---
+        if len(pb_resp) == 48 and username:
+            print(f"[VNC {label}] DSM Path B: 48B response — attempting MS-Logon II DH")
+            _gen  = int.from_bytes(pb_resp[0:16],  "big")
+            _mod  = int.from_bytes(pb_resp[16:32], "big")
+            _spub = int.from_bytes(pb_resp[32:48], "big")
+            print(f"[VNC {label}] MS-Logon II: gen=0x{_gen:032x} mod=0x{_mod:032x} "
+                  f"spub=0x{_spub:032x}")
+            _cpriv = int.from_bytes(os.urandom(16), "big") | 1
+            _cpub  = pow(_gen, _cpriv, _mod) if _mod > 1 else 0
+            _shared = pow(_spub, _cpriv, _mod) if _mod > 1 else 0
+            writer.write(_cpub.to_bytes(16, "big"))
+            await writer.drain()
+            _aes_key16 = hashlib.md5(_shared.to_bytes(16, "big")).digest()
+            _user_pad = (username.encode("utf-8") + b"\x00" * 256)[:256]
+            _pass_pad = (password.encode("utf-8") + b"\x00" * 64)[:64]
+            _enc_user = Cipher(algorithms.AES(_aes_key16 + _aes_key16),
+                               _OFB(bytes(16))).encryptor().update(_user_pad)
+            _enc_pass = Cipher(algorithms.AES(_aes_key16 + _aes_key16),
+                               _OFB(bytes(16))).encryptor().update(_pass_pad)
+            writer.write(_enc_user + _enc_pass)
+            await writer.drain()
+            print(f"[VNC {label}] MS-Logon II: sent cpub + enc credentials")
+            _sr_raw = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
+            _sr_plain = int.from_bytes(_sr_raw, "big")
+            print(f"[VNC {label}] MS-Logon II: SR={_sr_plain} raw={_sr_raw.hex()}")
+            if _sr_plain != 0:
+                raise _DSMAuthFailure(f"MS-Logon II rejected: SR=0x{_sr_plain:08x}")
+            enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).encryptor()
+            dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).decryptor()
+            print(f"[VNC {label}] MS-Logon II Auth OK")
+            return enc_ctx, dec_ctx, b""
+
+        # Unrecognised response — log all bytes and check for SR at offset 0.
+        print(f"[VNC {label}] DSM Path B: unrecognised {len(pb_resp)}B response "
+              f"full={pb_resp.hex()!r}")
+        if len(pb_resp) >= 4:
+            _iv, _ok = _pb_check_sr(pb_resp[:4])
+            if _ok:
+                enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_iv)).encryptor()
+                dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_iv)).decryptor()
+                dec_ctx.update(pb_resp[:4])
+                print(f"[VNC {label}] DSM Auth OK via Path B (SR=0 in first 4B)")
+                return enc_ctx, dec_ctx, b""
+        # Proceed anyway — let the RFB stream decoder surface any errors.
         enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).encryptor()
         dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).decryptor()
-        print(f"[VNC {label}] DSM Path B: proceeding despite SR=0x{plain_result:08x}")
+        print(f"[VNC {label}] DSM Path B: proceeding despite unknown server response")
         return enc_ctx, dec_ctx, b""
     elif 1 in types:
         selected = 1
@@ -2010,6 +2105,7 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     host_label = f"{session['host']}:{session['port']}"
     client_key_path = session.get("client_key_path")
+    username = session.get("username", "") or ""
     password = session.get("password", "") or ""
 
     await websocket.accept()
@@ -2023,7 +2119,8 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         mode = "DSM ClientAuth" if client_key_path else "plain"
         print(f"[VNC {host_label}] TCP connected ({mode})")
         enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
-            reader, writer, client_key_path or "", password, host_label)
+            reader, writer, client_key_path or "", password, host_label,
+            username=username)
     except Exception as e:
         print(f"[VNC {host_label}] Connection/handshake failed ({type(e).__name__}): {e}")
         try:
