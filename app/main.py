@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.86"
+APP_VERSION = "1.6.87"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1716,8 +1716,39 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             return enc_ctx, dec_ctx, dsm_leftover_dec
 
         # In sub-type 0x72, the 256 bytes from the server is an encrypted AES key (Path A only).
-        # Path B (treating bytes as server RSA pubkey) makes no sense in that mode.
+        # If leftover was empty (server sent exactly [22B header][256B key] with no bundled SR),
+        # the SecurityResult arrives as the next 4 bytes on the wire — read them now.
         if chosen == 0x72:
+            if not dsm_leftover_enc and raw_candidates:
+                print(f"[VNC {label}] DSM 0x72: no leftover — reading SR from network")
+                try:
+                    sr_raw = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
+                except Exception as _sr_e:
+                    raise _DSMAuthFailure(f"DSM 0x72: failed to read SR: {_sr_e}")
+                for _key_desc, _key_bytes in raw_candidates:
+                    try:
+                        _probe = Cipher(algorithms.AES(_key_bytes), _OFB(bytes(16))).decryptor()
+                        _sr_dec = int.from_bytes(_probe.update(sr_raw), "big")
+                        print(f"[VNC {label}] DSM 0x72 SR key={_key_desc} dec=0x{_sr_dec:08x}")
+                        if _sr_dec == 0:
+                            enc_ctx = Cipher(algorithms.AES(_key_bytes), _OFB(bytes(16))).encryptor()
+                            dec_ctx = Cipher(algorithms.AES(_key_bytes), _OFB(bytes(16))).decryptor()
+                            dec_ctx.update(sr_raw)  # advance past SR bytes
+                            print(f"[VNC {label}] DSM 0x72 Auth OK! ({_key_desc})")
+                            return enc_ctx, dec_ctx, b""
+                    except Exception as _ke:
+                        print(f"[VNC {label}] DSM 0x72 SR probe {_key_desc}: {_ke}")
+                _sr_plain = int.from_bytes(sr_raw, "big")
+                if _sr_plain == 0:
+                    # SR is plaintext — cipher starts at position 0 for RFB data
+                    _key_bytes = raw_candidates[0][1]
+                    enc_ctx = Cipher(algorithms.AES(_key_bytes), _OFB(bytes(16))).encryptor()
+                    dec_ctx = Cipher(algorithms.AES(_key_bytes), _OFB(bytes(16))).decryptor()
+                    print(f"[VNC {label}] DSM 0x72 Auth OK! (plain SR, {raw_candidates[0][0]})")
+                    return enc_ctx, dec_ctx, b""
+                raise _DSMAuthFailure(
+                    f"DSM 0x72: SR raw=0x{_sr_plain:08x}, no AES key gave SR=0"
+                )
             raise _DSMAuthFailure(f"0x72 Path A exhausted — no valid AES key found in server payload")
 
         # Path B: treat encrypted_key as the SERVER's RSA public key modulus.
@@ -1893,43 +1924,18 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     await websocket.accept()
 
-    # Phase 1: connect to VNC server (via DSM helper subprocess if DSM key configured)
-    helper_proc = None
-    helper_keystore = None
+    # Phase 1: connect to VNC server (Python DSM for SecureVNCPlugin2 ClientAuth, or plain TCP)
     try:
-        if client_key_path:
-            # UltraVNC DSM/SecureVNCPlugin2: delegate all auth to ultravnc_dsm_helper.
-            # Helper performs RSA ClientAuth key exchange and presents plain RFB on a local port.
-            reader, writer, helper_proc, helper_keystore = await _launch_securevnc_helper(
-                session["host"], session["port"], host_label, client_key_path)
-            enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
-                reader, writer, None, password, host_label)
-        else:
-            reader, writer = await asyncio.open_connection(session["host"], session["port"])
-            sock = writer.transport.get_extra_info("socket")
-            if sock:
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            print(f"[VNC {host_label}] TCP connected")
-            enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
-                reader, writer, None, password, host_label)
+        reader, writer = await asyncio.open_connection(session["host"], session["port"])
+        sock = writer.transport.get_extra_info("socket")
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        mode = "DSM ClientAuth" if client_key_path else "plain"
+        print(f"[VNC {host_label}] TCP connected ({mode})")
+        enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
+            reader, writer, client_key_path or "", password, host_label)
     except Exception as e:
         print(f"[VNC {host_label}] Connection/handshake failed ({type(e).__name__}): {e}")
-        if helper_proc:
-            try:
-                helper_proc.terminate()
-                await asyncio.sleep(0.2)
-                out, err = await helper_proc.communicate()
-                if out:
-                    print(f"[VNC {host_label}] DSM helper stdout: {out.decode(errors='replace')!r}")
-                if err:
-                    print(f"[VNC {host_label}] DSM helper stderr: {err.decode(errors='replace')!r}")
-            except Exception:
-                pass
-        if helper_keystore:
-            try:
-                os.unlink(helper_keystore)
-            except OSError:
-                pass
         try:
             await websocket.close()
         except Exception:
@@ -1995,16 +2001,6 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     for t in tasks:
         t.cancel()
     writer.close()
-    if helper_proc:
-        try:
-            helper_proc.terminate()
-        except Exception:
-            pass
-    if helper_keystore:
-        try:
-            os.unlink(helper_keystore)
-        except OSError:
-            pass
     print(f"[VNC {host_label}] proxy closed")
     try:
         await websocket.close()
