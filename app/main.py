@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.88"
+APP_VERSION = "1.6.89"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1438,6 +1438,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         writer.write(bytes([17]))
         await writer.drain()
 
+        _dsm_hdr16 = bytes(16)  # header-derived IV, overridden when 22B header is parsed
+
         with open(client_key_path, "rb") as f:
             key_data = f.read()
         print(f"[VNC {label}] Key file: {client_key_path} size={len(key_data)} "
@@ -1606,6 +1608,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 hdr_size = 22
                 encrypted_key = after_sub[hdr_size:hdr_size + key_size]
                 dsm_leftover_enc = after_sub[hdr_size + key_size:]
+                _dsm_hdr16 = after_sub[6:22]  # last 16 bytes of header — candidate IV
                 print(f"[VNC {label}] DSM: hdr={after_sub[:hdr_size].hex()} "
                       f"leftover_raw={dsm_leftover_enc.hex()}")
             else:
@@ -1654,8 +1657,14 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                         raw_candidates.append((f"{pad_name}-last16", plaintext[16:]))
                         raw_candidates.append((f"{pad_name}-32B", plaintext))
                     elif n >= 16:
-                        raw_candidates.append((f"{pad_name}-first16-of-{n}B", plaintext[:16]))
-                        raw_candidates.append((f"{pad_name}-last16-of-{n}B", plaintext[-16:]))
+                        # Full sliding-window scan — every 16-byte window of the plaintext.
+                        # Suppresses per-slice logging; only successes are printed.
+                        for _off in range(0, n - 15):
+                            raw_candidates.append((f"{pad_name}-s{_off:03d}", plaintext[_off:_off + 16]))
+                        # Hash-derived candidates: key = H(plaintext)
+                        raw_candidates.append((f"{pad_name}-sha256", hashlib.sha256(plaintext).digest()[:16]))
+                        raw_candidates.append((f"{pad_name}-sha1", hashlib.sha1(plaintext).digest()[:16]))
+                        raw_candidates.append((f"{pad_name}-md5", hashlib.md5(plaintext).digest()))
                 except Exception as e:
                     print(f"[VNC {label}] DSM {ord_pfx}{type(pad).__name__} failed: {e}")
             # Raw RSA decryption (no padding) — try last-16 and first-16 of m=c^d mod n
@@ -1684,18 +1693,25 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         path_a_iv = bytes(16)   # IV that produced SR=0
         path_a_sr_offset = 0    # byte offset of SR within dsm_leftover_dec
         dsm_leftover_dec = b""
-        # Hypothesis: server frame = [22B header][256B key][16B IV][remaining]
-        # so dsm_leftover_enc[:16] is the AES-OFB IV and leftover[16:] is ciphertext.
         _has_iv_prefix = len(dsm_leftover_enc) >= 20  # need at least IV(16) + SR(4)
         _iv_prefix = dsm_leftover_enc[:16] if _has_iv_prefix else None
+        # Third IV candidate: last 16 bytes of the 22-byte DSM header
+        _iv_hdr_useful = (_dsm_hdr16 != bytes(16) and
+                          _dsm_hdr16 != _iv_prefix and
+                          len(dsm_leftover_enc) >= 4)
+
+        _silent_prefixes = ("PKCS1v15-s", "REV-PKCS1v15-s")  # suppress per-slice log spam
+
         for key_desc, key_bytes in raw_candidates:
+            _silent = any(key_desc.startswith(p) for p in _silent_prefixes)
             try:
                 # Standard probe: IV=zeros, SR at leftover[0:4]
                 probe = Cipher(algorithms.AES(key_bytes), _OFB(bytes(16))).decryptor()
                 dec_left = probe.update(dsm_leftover_enc) if dsm_leftover_enc else b""
                 sr = int.from_bytes(dec_left[:4], "big") if len(dec_left) >= 4 else -1
-                print(f"[VNC {label}] DSM key={key_desc} ({key_bytes.hex()[:16]}…) "
-                      f"leftover-SR(IV=0)=0x{sr:08x}")
+                if not _silent:
+                    print(f"[VNC {label}] DSM key={key_desc} ({key_bytes.hex()[:16]}…) "
+                          f"leftover-SR(IV=0)=0x{sr:08x}")
                 if sr == 0:
                     path_a_aes_key = key_bytes
                     path_a_iv = bytes(16)
@@ -1708,17 +1724,36 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                     probe2 = Cipher(algorithms.AES(key_bytes), _OFB(_iv_prefix)).decryptor()
                     dec2 = probe2.update(dsm_leftover_enc[16:])
                     sr2 = int.from_bytes(dec2[:4], "big") if len(dec2) >= 4 else -1
-                    print(f"[VNC {label}] DSM key={key_desc} ({key_bytes.hex()[:16]}…) "
-                          f"leftover-SR(IV=left[:16])=0x{sr2:08x}")
+                    if not _silent:
+                        print(f"[VNC {label}] DSM key={key_desc} ({key_bytes.hex()[:16]}…) "
+                              f"leftover-SR(IV=left[:16])=0x{sr2:08x}")
                     if sr2 == 0:
                         path_a_aes_key = key_bytes
                         path_a_iv = _iv_prefix
                         path_a_sr_offset = 16
-                        dsm_leftover_dec = dec2  # ciphertext after IV prefix, decrypted
+                        dsm_leftover_dec = dec2
                         print(f"[VNC {label}] DSM Auth OK via Path A ({key_desc}, IV=leftover[:16])")
                         break
+                # Header-IV probe: IV=last16 bytes of the 22B DSM header
+                if _iv_hdr_useful:
+                    probe3 = Cipher(algorithms.AES(key_bytes), _OFB(_dsm_hdr16)).decryptor()
+                    dec3 = probe3.update(dsm_leftover_enc)
+                    sr3 = int.from_bytes(dec3[:4], "big") if len(dec3) >= 4 else -1
+                    if not _silent:
+                        print(f"[VNC {label}] DSM key={key_desc} ({key_bytes.hex()[:16]}…) "
+                              f"leftover-SR(IV=hdr[-16:])=0x{sr3:08x}")
+                    if sr3 == 0:
+                        path_a_aes_key = key_bytes
+                        path_a_iv = _dsm_hdr16
+                        path_a_sr_offset = 0
+                        dsm_leftover_dec = dec3
+                        print(f"[VNC {label}] DSM Auth OK via Path A ({key_desc}, IV=hdr[-16:])")
+                        break
             except Exception as e:
-                print(f"[VNC {label}] DSM probe {key_desc} failed: {e}")
+                if not _silent:
+                    print(f"[VNC {label}] DSM probe {key_desc} failed: {e}")
+        print(f"[VNC {label}] DSM: probed {len(raw_candidates)} key candidates"
+              f" (leftover={len(dsm_leftover_enc)}B)")
 
         # If a candidate confirmed SR=0, use it and return.
         if path_a_aes_key is not None:

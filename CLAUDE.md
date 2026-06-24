@@ -1,5 +1,11 @@
 # RCommander — Claude Guidelines
 
+## Branching — ABSOLUTE RULE
+
+- **Only `main` exists.** Never create any other branch for any reason.
+- All commits go directly to `main`. No feature branches, no PR branches, nothing.
+- If a branch other than `main` is ever created, delete it immediately.
+
 ## Docker & Build
 
 - The web app runs as a Docker container; always build multi-arch: **linux/amd64** and **linux/arm64**
