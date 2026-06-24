@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.89"
+APP_VERSION = "1.6.90"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1610,6 +1610,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 dsm_leftover_enc = after_sub[hdr_size + key_size:]
                 _dsm_hdr16 = after_sub[6:22]  # last 16 bytes of header — candidate IV
                 print(f"[VNC {label}] DSM: hdr={after_sub[:hdr_size].hex()} "
+                      f"encrypted_key[:32]={encrypted_key[:32].hex()} "
                       f"leftover_raw={dsm_leftover_enc.hex()}")
             else:
                 # Send RSA public key as raw big-endian modulus (no DER/ASN.1 wrapper)
@@ -1827,7 +1828,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 raise _DSMAuthFailure(
                     f"DSM 0x72: SR raw=0x{_sr_plain:08x}, no AES key gave SR=0"
                 )
-            raise _DSMAuthFailure(f"0x72 Path A exhausted — no valid AES key found in server payload")
+            print(f"[VNC {label}] DSM 0x72: Path A exhausted with leftover — "
+                  f"falling to Path B (treat 256B as server public key modulus)")
 
         # Path B: treat encrypted_key as the SERVER's RSA public key modulus.
         # Windows CryptoAPI exports the modulus in little-endian (reversed) byte order.
@@ -1884,25 +1886,32 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
               f"cipher={'LE' if dsm_reverse_cipher else 'BE'}, "
               f"rsa={'raw' if dsm_raw_rsa else 'PKCS1v15'}), "
               f"our AES key={path_b_aes_key.hex()}")
-        # Use leftover[:16] as IV if available (hypothesis: server embeds IV in leftover frame).
-        iv = dsm_leftover_enc[:16] if len(dsm_leftover_enc) >= 16 else bytes(16)
-        print(f"[VNC {label}] DSM Path B: IV={iv.hex()} "
-              f"(source={'leftover[:16]' if len(dsm_leftover_enc) >= 16 else 'zeros'})")
-        enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(iv)).encryptor()
-        dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(iv)).decryptor()
-        print(f"[VNC {label}] DSM: discarding {len(dsm_leftover_enc)}B pre-exchange leftover")
+        # Build ordered list of IV candidates to try against the SecurityResult.
+        # IV=zeros is tried first (most likely for ClientAuth where leftover is pre-auth data).
+        _pb_iv_list = [("zeros", bytes(16))]
+        if len(dsm_leftover_enc) >= 16 and dsm_leftover_enc[:16] != bytes(16):
+            _pb_iv_list.append(("leftover[:16]", dsm_leftover_enc[:16]))
+        if _dsm_hdr16 and _dsm_hdr16 != bytes(16):
+            _pb_iv_list.append(("hdr[-16:]", _dsm_hdr16))
+        print(f"[VNC {label}] DSM Path B: discarding {len(dsm_leftover_enc)}B pre-exchange leftover")
         raw = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
         plain_result = int.from_bytes(raw, "big")
-        dec_raw = dec_ctx.update(raw)
-        enc_result = int.from_bytes(dec_raw, "big")
-        print(f"[VNC {label}] DSM Path B: SecurityResult raw={raw.hex()} "
-              f"plain=0x{plain_result:08x} aes_dec=0x{enc_result:08x}")
+        print(f"[VNC {label}] DSM Path B: SecurityResult raw={raw.hex()} plain=0x{plain_result:08x}")
         if plain_result == 0:
+            enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).encryptor()
+            dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).decryptor()
             print(f"[VNC {label}] DSM Auth OK via Path B (plain SR)")
             return enc_ctx, dec_ctx, b""
-        if enc_result == 0:
-            print(f"[VNC {label}] DSM Auth OK via Path B (AES SR)")
-            return enc_ctx, dec_ctx, b""
+        for _iv_desc, _pb_iv in _pb_iv_list:
+            _dec_sr = Cipher(algorithms.AES(path_b_aes_key), _OFB(_pb_iv)).decryptor().update(raw)
+            _enc_result = int.from_bytes(_dec_sr, "big")
+            print(f"[VNC {label}] DSM Path B: SR(IV={_iv_desc}) aes_dec=0x{_enc_result:08x}")
+            if _enc_result == 0:
+                enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_pb_iv)).encryptor()
+                dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_pb_iv)).decryptor()
+                dec_ctx.update(raw)  # advance past SR bytes already consumed
+                print(f"[VNC {label}] DSM Auth OK via Path B (AES SR, IV={_iv_desc})")
+                return enc_ctx, dec_ctx, b""
         # Read extra bytes for diagnostics.
         try:
             extra = await asyncio.wait_for(reader.read(100), timeout=0.5)
@@ -1918,8 +1927,9 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 raise _DSMAuthFailure(f"Server closed after SR=0x{plain_result:08x}")
         except asyncio.TimeoutError:
             # Server sent nothing after SR — proceed optimistically.
-            # SR=1 in UltraVNC DSM may not be a standard RFB failure code.
             print(f"[VNC {label}] DSM Path B: no data after SR={plain_result} — proceeding")
+            enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).encryptor()
+            dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).decryptor()
             return enc_ctx, dec_ctx, b""
         except _DSMAuthFailure:
             raise
@@ -1927,6 +1937,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             pass
         # Server sent data after SR=1 (reason string or more RFB data).
         # Proceed: SR might not follow standard RFB semantics in UltraVNC DSM.
+        enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).encryptor()
+        dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).decryptor()
         print(f"[VNC {label}] DSM Path B: proceeding despite SR=0x{plain_result:08x}")
         return enc_ctx, dec_ctx, b""
     elif 1 in types:
