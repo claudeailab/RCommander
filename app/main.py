@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.84"
+APP_VERSION = "1.6.85"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1234,99 +1234,6 @@ def _parse_rsapubkey_ber(data: bytes):
     return RSAPublicNumbers(e=e, n=n).public_key()
 
 
-async def _fetch_securevnc_server_pubkey_der(host: str, port: int, label: str) -> bytes:
-    """
-    Open a throwaway connection to the UltraVNC SecureVNCPlugin2 server, extract
-    the server's RSA public key (256-byte big-endian modulus at offset 25 of the
-    type-17/0x73 greeting), and return it as a PKCS#1 DER RSAPublicKey so it can
-    be saved as the ultravnc_dsm_helper keystore.
-    The connection is closed immediately after the key is read (auth never completes).
-    """
-    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-
-    reader, writer = await asyncio.open_connection(host, port)
-    try:
-        banner = await asyncio.wait_for(reader.readexactly(12), timeout=5.0)
-        if not banner.startswith(b"RFB "):
-            raise RuntimeError(f"Not a VNC server: {banner!r}")
-        writer.write(b"RFB 003.008\n")
-        await writer.drain()
-
-        # Read security type list
-        num = (await asyncio.wait_for(reader.readexactly(1), timeout=5.0))[0]
-        if num == 0:
-            raise RuntimeError("Server refused connection during key-fetch")
-        types = list(await asyncio.wait_for(reader.readexactly(num), timeout=5.0))
-        if 17 not in types:
-            raise RuntimeError(f"Server does not offer type-17 DSM (offered: {types})")
-
-        # Select security type 17
-        writer.write(bytes([17]))
-        await writer.drain()
-
-        # Read greeting: [4B caps][1B count][sub_types...]
-        greeting = b""
-        deadline = asyncio.get_event_loop().time() + 3.0
-        while asyncio.get_event_loop().time() < deadline:
-            try:
-                chunk = await asyncio.wait_for(reader.read(64), timeout=0.5)
-                if not chunk:
-                    break
-                greeting += chunk
-                if len(greeting) >= 6:
-                    sub_count = greeting[4] if len(greeting) > 4 else 0
-                    if len(greeting) >= 5 + sub_count:
-                        break
-            except asyncio.TimeoutError:
-                break
-
-        # Select sub-type 0x73 (server sends its RSA public key)
-        writer.write(bytes([0x73]))
-        await writer.drain()
-
-        # Read the blob: [22B header][3B unknown][256B RSA modulus][4B flags][54B RC4 chal]
-        blob = b""
-        deadline = asyncio.get_event_loop().time() + 5.0
-        while len(blob) < 285 and asyncio.get_event_loop().time() < deadline:
-            try:
-                chunk = await asyncio.wait_for(reader.read(512), timeout=1.0)
-                if not chunk:
-                    break
-                blob += chunk
-            except asyncio.TimeoutError:
-                if blob:
-                    break
-
-        if len(blob) < 281:
-            raise RuntimeError(f"Server RSA blob too short: {len(blob)}B hex={blob.hex()}")
-
-        # Find the 256-byte odd RSA modulus by scanning offsets 22-27
-        n_bytes = None
-        for off in range(22, 28):
-            if len(blob) < off + 256:
-                break
-            cand = blob[off:off + 256]
-            n_val = int.from_bytes(cand, "big")
-            if n_val & 1:
-                n_bytes = cand
-                print(f"[VNC {label}] Key-fetch: RSA modulus at offset {off}, lsb=0x{cand[-1]:02x}")
-                break
-
-        if n_bytes is None:
-            raise RuntimeError(f"No valid RSA modulus found in blob: {blob[:32].hex()}")
-
-        n = int.from_bytes(n_bytes, "big")
-        der = RSAPublicNumbers(e=65537, n=n).public_key().public_bytes(Encoding.DER, PublicFormat.PKCS1)
-        print(f"[VNC {label}] Key-fetch: captured {len(der)}B PKCS#1 DER RSA pubkey")
-        return der
-    finally:
-        try:
-            writer.close()
-        except Exception:
-            pass
-
-
 async def _launch_securevnc_helper(host: str, port: int, label: str):
     """
     Launch ultravnc_dsm_helper in 'securevnc' mode as a local TCP proxy.
@@ -1334,33 +1241,31 @@ async def _launch_securevnc_helper(host: str, port: int, label: str):
     natively, and presents a plain (unencrypted) VNC stream on a local port.
     Returns (reader, writer, proc) — caller must proc.terminate() on cleanup.
 
-    On first use the server's RSA public key is fetched via a throwaway
-    connection and stored as the keystore so the helper runs without any
-    interactive prompt (the Tcl/Tk GUI dialog cannot open in a headless env).
+    We deliberately do NOT pre-fetch the server's RSA key before launching the
+    helper — doing so causes an abrupt disconnect that triggers the server's
+    IP blacklist, making the helper's own connection fail (n=0 bytes from server).
+
+    Instead we rely on the helper's built-in fallback: when DISPLAY is absent
+    the Tcl/Tk dialog fails immediately, the helper prints a WARNING, and
+    continues with the DSM exchange without user interaction.
     """
     # Bind an ephemeral port to discover a free number, then release it.
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         local_port = s.getsockname()[1]
 
-    # Stable keystore per host:port so the helper skips the "save key?" GUI
-    # on every connection after the first.
+    # Use a per-session keystore path so no stale file from a previous
+    # connection (possibly in a different format) causes a mismatch error.
     safe_host = host.replace(":", "_")
-    keystore = f"/tmp/svnc_{safe_host}_{port}.rsa"
+    keystore = f"/tmp/svnc_{safe_host}_{port}_{local_port}.rsa"
 
-    if not os.path.exists(keystore):
-        print(f"[VNC {label}] No keystore — fetching server RSA pubkey")
-        der = await _fetch_securevnc_server_pubkey_der(host, port, label)
-        with open(keystore, "wb") as f:
-            f.write(der)
-        print(f"[VNC {label}] Keystore written: {keystore} ({len(der)}B)")
-
+    # Strip DISPLAY/XAUTHORITY so that 'wish' (Tcl/Tk, installed with ssvnc)
+    # fails immediately with "no display name" rather than blocking while
+    # trying to connect to an unreachable X11 socket.
     env = {k: v for k, v in os.environ.items()
            if k not in ("DISPLAY", "XAUTHORITY")}
     env["ULTRAVNC_DSM_HELPER_NOIPV6"] = "1"
-    print(f"[VNC {label}] Launching DSM helper "
-          f"(DISPLAY was {'set' if 'DISPLAY' in os.environ else 'unset'}, "
-          f"keystore {'exists' if os.path.exists(keystore) else 'missing'})")
+
     proc = await asyncio.create_subprocess_exec(
         "/usr/lib/ssvnc/ultravnc_dsm_helper",
         "securevnc", keystore, str(local_port), f"{host}:{port}",
@@ -1375,8 +1280,7 @@ async def _launch_securevnc_helper(host: str, port: int, label: str):
     for delay in (0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.2):
         await asyncio.sleep(delay)
         if proc.returncode is not None:
-            out_b = b""
-            err_b = b""
+            out_b, err_b = b"", b""
             try:
                 out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=2.0)
             except Exception:
@@ -1395,13 +1299,14 @@ async def _launch_securevnc_helper(host: str, port: int, label: str):
         proc.terminate()
         raise RuntimeError(f"DSM helper never bound :{local_port}")
 
-    # Drain any stderr the helper has printed up to this point (diagnostic).
+    # Brief pause to let the helper complete its remote DSM exchange, then
+    # drain any stderr it has printed (diagnostic).
     for _ in range(5):
         await asyncio.sleep(0.5)
         try:
             err_chunk = await asyncio.wait_for(proc.stderr.read(4096), timeout=0.05)
             if err_chunk:
-                print(f"[VNC {label}] DSM helper stderr: {err_chunk.decode(errors='replace')!r}")
+                print(f"[VNC {label}] DSM helper: {err_chunk.decode(errors='replace')!r}")
         except (asyncio.TimeoutError, Exception):
             pass
         if proc.returncode is not None:
@@ -1416,7 +1321,7 @@ async def _launch_securevnc_helper(host: str, port: int, label: str):
                 f"stderr={err_b.decode(errors='replace')!r}"
             )
 
-    print(f"[VNC {label}] DSM helper proxying :{local_port} → {host}:{port}")
+    print(f"[VNC {label}] DSM helper ready :{local_port} → {host}:{port}")
     return reader, writer, proc
 
 
