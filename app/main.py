@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.85"
+APP_VERSION = "1.6.86"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1234,30 +1234,44 @@ def _parse_rsapubkey_ber(data: bytes):
     return RSAPublicNumbers(e=e, n=n).public_key()
 
 
-async def _launch_securevnc_helper(host: str, port: int, label: str):
+async def _launch_securevnc_helper(host: str, port: int, label: str,
+                                    client_key_path: str = ""):
     """
     Launch ultravnc_dsm_helper in 'securevnc' mode as a local TCP proxy.
     The helper connects to host:port, performs the RSA/AES key exchange
     natively, and presents a plain (unencrypted) VNC stream on a local port.
-    Returns (reader, writer, proc) — caller must proc.terminate() on cleanup.
+    Returns (reader, writer, proc, keystore_symlink) — caller must
+    proc.terminate() and optionally os.unlink(keystore_symlink) on cleanup.
 
-    We deliberately do NOT pre-fetch the server's RSA key before launching the
-    helper — doing so causes an abrupt disconnect that triggers the server's
-    IP blacklist, making the helper's own connection fail (n=0 bytes from server).
-
-    Instead we rely on the helper's built-in fallback: when DISPLAY is absent
-    the Tcl/Tk dialog fails immediately, the helper prints a WARNING, and
-    continues with the DSM exchange without user interaction.
+    client_key_path: path to the ViewerClientAuth.pkey DER-encoded RSA private
+    key.  The helper requires the keyfile name to END in 'ClientAuth.pkey' to
+    trigger client authentication mode, so we create a per-session symlink with
+    that suffix.
     """
     # Bind an ephemeral port to discover a free number, then release it.
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         local_port = s.getsockname()[1]
 
-    # Use a per-session keystore path so no stale file from a previous
-    # connection (possibly in a different format) causes a mismatch error.
     safe_host = host.replace(":", "_")
-    keystore = f"/tmp/svnc_{safe_host}_{port}_{local_port}.rsa"
+
+    # The helper uses the keyfile name suffix to determine auth mode:
+    #   ends in 'ClientAuth.pkey'     → RSA client key authentication
+    #   ends in 'ClientAuth.pkey.rsa' → client auth + server RSA keystore
+    # We symlink the stored key to a temp path ending in 'ClientAuth.pkey'.
+    keystore_symlink = f"/tmp/svnc_{safe_host}_{port}_{local_port}_ClientAuth.pkey"
+    try:
+        os.unlink(keystore_symlink)
+    except FileNotFoundError:
+        pass
+    if client_key_path and os.path.exists(client_key_path):
+        os.symlink(client_key_path, keystore_symlink)
+        keystore = keystore_symlink
+        print(f"[VNC {label}] DSM ClientAuth key: {client_key_path} → {keystore_symlink}")
+    else:
+        # No client key — run without a keystore; helper falls back to WARNING
+        keystore = keystore_symlink  # non-existent path → no keystore
+        print(f"[VNC {label}] DSM no client key — helper will warn and continue")
 
     # Strip DISPLAY/XAUTHORITY so that 'wish' (Tcl/Tk, installed with ssvnc)
     # fails immediately with "no display name" rather than blocking while
@@ -1322,7 +1336,7 @@ async def _launch_securevnc_helper(host: str, port: int, label: str):
             )
 
     print(f"[VNC {label}] DSM helper ready :{local_port} → {host}:{port}")
-    return reader, writer, proc
+    return reader, writer, proc, keystore_symlink
 
 
 async def _server_rfb_handshake(reader, writer, client_key_path: str,
@@ -1881,12 +1895,13 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     # Phase 1: connect to VNC server (via DSM helper subprocess if DSM key configured)
     helper_proc = None
+    helper_keystore = None
     try:
         if client_key_path:
             # UltraVNC DSM/SecureVNCPlugin2: delegate all auth to ultravnc_dsm_helper.
-            # Helper performs RSA key exchange and presents plain RFB on a local port.
-            reader, writer, helper_proc = await _launch_securevnc_helper(
-                session["host"], session["port"], host_label)
+            # Helper performs RSA ClientAuth key exchange and presents plain RFB on a local port.
+            reader, writer, helper_proc, helper_keystore = await _launch_securevnc_helper(
+                session["host"], session["port"], host_label, client_key_path)
             enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
                 reader, writer, None, password, host_label)
         else:
@@ -1909,6 +1924,11 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
                 if err:
                     print(f"[VNC {host_label}] DSM helper stderr: {err.decode(errors='replace')!r}")
             except Exception:
+                pass
+        if helper_keystore:
+            try:
+                os.unlink(helper_keystore)
+            except OSError:
                 pass
         try:
             await websocket.close()
@@ -1979,6 +1999,11 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         try:
             helper_proc.terminate()
         except Exception:
+            pass
+    if helper_keystore:
+        try:
+            os.unlink(helper_keystore)
+        except OSError:
             pass
     print(f"[VNC {host_label}] proxy closed")
     try:
