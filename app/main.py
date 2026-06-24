@@ -132,7 +132,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.87"
+APP_VERSION = "1.6.88"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1144,11 +1144,52 @@ def vnc_session_page(token: str):
 
 
 def _load_rsa_private_key(key_data: bytes):
+    """Try every known format for loading an RSA private key."""
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateNumbers, RSAPublicNumbers
+    from cryptography.hazmat.backends import default_backend
+
+    # 1. Standard PEM / DER (PKCS#1 or PKCS#8)
     for loader in [serialization.load_pem_private_key, serialization.load_der_private_key]:
         try:
             return loader(key_data, password=None)
         except Exception:
             pass
+
+    # 2. DER with a non-zero byte offset (custom header up to 20 bytes)
+    #    Some tools prepend file size, magic, or metadata before the DER SEQUENCE.
+    for off in range(1, min(20, len(key_data))):
+        if key_data[off] == 0x30:
+            try:
+                return serialization.load_der_private_key(key_data[off:], password=None)
+            except Exception:
+                pass
+
+    # 3. Microsoft CryptoAPI PRIVATEKEYBLOB (bType=0x07 bVersion=0x02 magic=b'RSA2')
+    try:
+        if len(key_data) >= 20 and key_data[0] == 0x07 and key_data[1] == 0x02 and key_data[8:12] == b'RSA2':
+            bitlen = int.from_bytes(key_data[12:16], 'little')
+            pubexp = int.from_bytes(key_data[16:20], 'little')
+            half = bitlen // 16
+            ksize = bitlen // 8
+            off = 20
+            def _le(b): return int.from_bytes(b, 'little')
+            n  = _le(key_data[off:off+ksize]); off += ksize
+            p  = _le(key_data[off:off+half]);  off += half
+            q  = _le(key_data[off:off+half]);  off += half
+            dp = _le(key_data[off:off+half]);  off += half
+            dq = _le(key_data[off:off+half]);  off += half
+            qi = _le(key_data[off:off+half]);  off += half
+            d  = _le(key_data[off:off+ksize])
+            pub = RSAPublicNumbers(e=pubexp, n=n)
+            priv = RSAPrivateNumbers(p=p, q=q, d=d, dmp1=dp, dmq1=dq, iqmp=qi, public_numbers=pub)
+            return priv.private_key(default_backend())
+    except Exception:
+        pass
+
+    # Nothing worked — log first 32 bytes so we can diagnose the format.
+    print(f"[RSA] load failed: size={len(key_data)} "
+          f"hex[0:32]={key_data[:32].hex()} "
+          f"hex[0:4]={key_data[:4].hex()}")
     return None
 
 
@@ -1399,6 +1440,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
 
         with open(client_key_path, "rb") as f:
             key_data = f.read()
+        print(f"[VNC {label}] Key file: {client_key_path} size={len(key_data)} "
+              f"magic={key_data[:4].hex() if len(key_data)>=4 else 'short'}")
         private_key = _load_rsa_private_key(key_data)
         if private_key is None:
             raise ValueError("Cannot load RSA private key")
