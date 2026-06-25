@@ -1064,32 +1064,33 @@
       </div>
     </div>
   </div>
-</main>
 
-<!-- SCHEDULE -->
-<div id="tab-schedule" style="display:none">
-  <div class="topbar">
-    <span class="page-title">Schedule</span>
-    <button class="btn btn-primary" onclick="openScheduleModal()">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      New Schedule
-    </button>
+  <!-- SCHEDULE -->
+  <div id="tab-schedule" style="display:none">
+    <div class="topbar">
+      <span class="page-title">Schedule</span>
+      <button class="btn btn-primary" onclick="openScheduleModal()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Schedule
+      </button>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr>
+          <th>Name</th>
+          <th>Server</th>
+          <th>Command</th>
+          <th>Schedule</th>
+          <th>Status</th>
+          <th>Last Run</th>
+          <th style="width:120px"></th>
+        </tr></thead>
+        <tbody id="schedule-tbody"></tbody>
+      </table>
+    </div>
   </div>
-  <div class="table-wrap">
-    <table class="table">
-      <thead><tr>
-        <th>Name</th>
-        <th>Server</th>
-        <th>Command</th>
-        <th>Schedule</th>
-        <th>Status</th>
-        <th>Last Run</th>
-        <th style="width:120px"></th>
-      </tr></thead>
-      <tbody id="schedule-tbody"></tbody>
-    </table>
-  </div>
-</div>
+
+</main>
 
 <!-- Schedule run output overlay -->
 <div class="overlay hidden" id="schedule-output-overlay" onclick="closeScheduleOutput(event)">
@@ -3414,9 +3415,6 @@ function _buildScheduleModal(sched) {
   const cronVal = sched?.cron_expr || '0 * * * *';
   const isCustomCron = !CRON_PRESETS.some(p => p.value === cronVal && p.value !== '__custom__');
 
-  const serverOpts = state.servers.map(s =>
-    `<option value="${s.id}" ${sched?.server_id === s.id ? 'selected' : ''}>${escape(s.name)}</option>`).join('');
-
   const credOpts = `<option value="">— use server default —</option>` +
     state.credentials.map(c =>
       `<option value="${c.id}" ${sched?.credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('');
@@ -3434,7 +3432,11 @@ function _buildScheduleModal(sched) {
       <div class="form-group"><label class="form-label">Name</label>
         <input class="form-input" id="sc-name" value="${escape(sched?.name || '')}" placeholder="Daily backup"></div>
       <div class="form-group"><label class="form-label">Server</label>
-        <select class="form-input" id="sc-server">${serverOpts}</select></div>
+        <div id="sc-folder-path" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
+        <select class="form-input" id="sc-server">
+          <option value="">— select server —</option>
+        </select>
+      </div>
       <div class="form-group"><label class="form-label">Credential <span style="color:var(--muted);font-size:12px">(optional)</span></label>
         <select class="form-input" id="sc-credential">${credOpts}</select></div>
       <div class="form-group"><label class="form-label">Command</label>
@@ -3448,9 +3450,9 @@ function _buildScheduleModal(sched) {
       <div class="form-group" id="sc-custom-cron-wrap" style="${isCustomCron ? '' : 'display:none'}">
         <label class="form-label">Cron expression <span style="color:var(--muted);font-size:12px">minute hour day month weekday</span></label>
         <input class="form-input" id="sc-cron-custom" style="font-family:monospace" value="${isCustomCron ? escape(cronVal) : ''}" placeholder="*/30 * * * *"></div>
-      <div class="form-group" style="display:flex;align-items:center;gap:10px">
-        <input type="checkbox" id="sc-enabled" ${sched?.enabled !== 0 ? 'checked' : ''} style="width:16px;height:16px">
-        <label for="sc-enabled" class="form-label" style="margin:0">Enabled</label>
+      <div style="margin-top:12px;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="sc-enabled" ${sched?.enabled !== 0 ? 'checked' : ''} style="width:16px;height:16px;flex-shrink:0">
+        <label for="sc-enabled" style="margin:0;font-size:13px;color:var(--text);cursor:pointer">Enabled</label>
       </div>
     </div>
     ${modalFooter('saveSchedule')}`;
@@ -3466,13 +3468,86 @@ function _scCronChange() {
   document.getElementById('sc-custom-cron-wrap').style.display = v === '__custom__' ? '' : 'none';
 }
 
+// ── Schedule modal server folder-picker ───────────────────────────────────────
+let _scPath = null; // null = no folder filter; '' = root
+
+function _scChildFolders(parentPath) {
+  const prefix = parentPath === '' ? '' : parentPath + '/';
+  const depth  = parentPath === '' ? 0 : parentPath.split('/').length;
+  return state.groups
+    .filter(g => {
+      if (parentPath === '') return g.split('/').length === 1;
+      return g.startsWith(prefix) && g.split('/').length === depth + 1;
+    })
+    .sort();
+}
+
+function _renderScFolderPath() {
+  const container = document.getElementById('sc-folder-path');
+  if (!container) return;
+
+  const levels = _scPath
+    ? _scPath.split('/').map((_, i, arr) => arr.slice(0, i + 1).join('/'))
+    : [];
+
+  let html = '';
+  const topFolders = _scChildFolders('');
+  if (topFolders.length > 0) {
+    const topVal = levels.length > 0 ? levels[0] : '';
+    html += `<select class="exec-folder-sel" data-level="0" onchange="_onScFolderChange(this)">
+      <option value="">— all servers —</option>` +
+      topFolders.map(f => `<option value="${escape(f)}" ${f===topVal?'selected':''}>${escape(f)}</option>`).join('') +
+      `</select>`;
+
+    for (let i = 0; i < levels.length; i++) {
+      const children = _scChildFolders(levels[i]);
+      if (children.length === 0) break;
+      const childVal = levels[i + 1] || '';
+      html += `<select class="exec-folder-sel" data-level="${i + 1}" onchange="_onScFolderChange(this)">
+        <option value="">— select subfolder —</option>` +
+        children.map(f => `<option value="${escape(f)}" ${f===childVal?'selected':''}>${escape(f.split('/').pop())}</option>`).join('') +
+        `</select>`;
+    }
+  }
+
+  container.innerHTML = html;
+  _updateScServerOptions();
+}
+
+function _onScFolderChange(sel) {
+  _scPath = sel.value === '' ? null : sel.value;
+  _renderScFolderPath();
+}
+
+function _updateScServerOptions(preselect) {
+  const el = document.getElementById('sc-server');
+  if (!el) return;
+  const cur = preselect !== undefined ? preselect : el.value;
+  const servers = _scPath === null
+    ? state.servers
+    : state.servers.filter(s => s.server_group === _scPath);
+  el.innerHTML = `<option value="">— select server —</option>` +
+    servers.map(s => `<option value="${s.id}" ${String(s.id)===String(cur)?'selected':''}>${escape(s.name)}</option>`).join('');
+}
+
 let _scheduleEditId = null;
 
 function openScheduleModal(id) {
   _scheduleEditId = id || null;
   const sched = id ? state.schedules.find(x => x.id === id) : null;
+
+  // Pre-set folder path to the edited schedule's server group (if any)
+  if (sched?.server_id) {
+    const srv = state.servers.find(s => s.id === sched.server_id);
+    _scPath = srv?.server_group || null;
+  } else {
+    _scPath = null;
+  }
+
   modalBox.innerHTML = _buildScheduleModal(sched);
   overlay.classList.remove('hidden');
+  _renderScFolderPath();
+  if (sched?.server_id) _updateScServerOptions(sched.server_id);
   setTimeout(() => modalBox.querySelector('#sc-name')?.focus(), 50);
 }
 
