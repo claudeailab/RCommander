@@ -1113,6 +1113,20 @@
   </div>
 </div>
 
+<!-- Schedule history overlay -->
+<div class="overlay hidden" id="schedule-history-overlay" onclick="closeScheduleHistory(event)">
+  <div class="modal" style="max-width:820px;width:95vw;max-height:90vh">
+    <div class="modal-header">
+      <span class="modal-title" id="schedule-history-title">Run History</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-ghost btn-sm" onclick="clearScheduleHistory()" style="font-size:12px">Clear history</button>
+        <button class="modal-close" onclick="closeScheduleHistory()">×</button>
+      </div>
+    </div>
+    <div id="schedule-history-body" style="overflow-y:auto;max-height:calc(90vh - 60px);padding:4px 0 8px"></div>
+  </div>
+</div>
+
 <!-- Modal overlay -->
 <div class="overlay hidden" id="overlay" onclick="closeModalOutside(event)">
   <div class="modal" id="modal-box">
@@ -3394,8 +3408,8 @@ function renderSchedules() {
       <td>${statusBadge(s.last_run_status)}</td>
       <td style="font-size:12px;color:var(--muted)">${relTime(s.last_run_at)}</td>
       <td style="white-space:nowrap">
-        <button class="btn btn-ghost btn-sm" title="View last output" onclick="viewScheduleOutput(${s.id})" ${s.last_run_output ? '' : 'disabled'}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        <button class="btn btn-ghost btn-sm" title="Run history" onclick="openScheduleHistory(${s.id},'${escape(s.name)}')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </button>
         <button class="btn btn-ghost btn-sm" title="Test run" onclick="testScheduleRun(${s.id},'${escape(s.name)}')">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -3687,6 +3701,83 @@ setInterval(() => {
   const tab = document.querySelector('#tab-schedule');
   if (tab && tab.style.display !== 'none') loadSchedules().catch(() => {});
 }, 30000);
+
+// ── Schedule history ──────────────────────────────────────────────────────────
+
+let _historyScheduleId = null;
+
+function closeScheduleHistory(e) {
+  if (e && e.target !== document.getElementById('schedule-history-overlay')) return;
+  document.getElementById('schedule-history-overlay').classList.add('hidden');
+  _historyScheduleId = null;
+}
+
+async function openScheduleHistory(id, name) {
+  _historyScheduleId = id;
+  document.getElementById('schedule-history-title').textContent = `Run History — ${name}`;
+  const body = document.getElementById('schedule-history-body');
+  body.innerHTML = '<div style="padding:20px;color:var(--muted);font-size:13px">Loading…</div>';
+  document.getElementById('schedule-history-overlay').classList.remove('hidden');
+  await _loadHistoryRuns();
+}
+
+async function _loadHistoryRuns() {
+  const id = _historyScheduleId;
+  if (!id) return;
+  const body = document.getElementById('schedule-history-body');
+  try {
+    const runs = await api('GET', `/api/schedules/${id}/history?limit=100`);
+    if (!runs.length) {
+      body.innerHTML = '<div style="padding:20px;color:var(--muted);font-size:13px">No runs recorded yet.</div>';
+      return;
+    }
+    body.innerHTML = runs.map(r => {
+      const statusColor = r.status === 'success' ? 'var(--accent-h)' : r.status === 'running' ? 'var(--accent)' : 'var(--danger)';
+      const dur = r.duration_ms != null ? (r.duration_ms >= 1000 ? `${(r.duration_ms/1000).toFixed(1)}s` : `${r.duration_ms}ms`) : '';
+      const rid = `hr-${r.id}`;
+      return `<div style="border-bottom:1px solid var(--border);padding:12px 20px">
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="toggleHistoryRow('${rid}')">
+          <span style="width:8px;height:8px;border-radius:50%;background:${statusColor};flex-shrink:0;display:inline-block"></span>
+          <span style="font-size:13px;font-weight:500;flex:1">${r.run_at || '—'}</span>
+          ${dur ? `<span style="font-size:12px;color:var(--muted)">${dur}</span>` : ''}
+          <span style="font-size:12px;font-weight:600;color:${statusColor};text-transform:uppercase">${r.status}</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--muted);flex-shrink:0"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div id="${rid}" style="display:none;margin-top:10px">
+          <div style="
+            background:#0d1117;border:1px solid var(--border);border-radius:6px;
+            font-family:'Courier New',Courier,monospace;font-size:12px;line-height:1.5;
+            padding:12px;max-height:300px;overflow-y:auto;
+            white-space:pre-wrap;word-break:break-all;color:#e6edf3">${escape(r.output || '(no output)')}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<div style="padding:20px;color:var(--danger);font-size:13px">Failed to load: ${escape(e.message)}</div>`;
+  }
+}
+
+function toggleHistoryRow(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : '';
+  const row = el.previousElementSibling;
+  const chevron = row?.querySelector('svg:last-child');
+  if (chevron) chevron.style.transform = open ? '' : 'rotate(180deg)';
+}
+
+async function clearScheduleHistory() {
+  if (!_historyScheduleId) return;
+  if (!confirm('Clear all run history for this schedule?')) return;
+  try {
+    await api('DELETE', `/api/schedules/${_historyScheduleId}/history`);
+    toast('History cleared');
+    await _loadHistoryRuns();
+  } catch (e) {
+    toast(e.message, 'fail');
+  }
+}
 </script>
 </body>
 </html>

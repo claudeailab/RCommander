@@ -113,6 +113,16 @@ class ScheduleRow(Base):
     created_at = Column(String, nullable=False, default="")
 
 
+class ScheduleRunRow(Base):
+    __tablename__ = "schedule_runs"
+    id = Column(Integer, primary_key=True, index=True)
+    schedule_id = Column(Integer, nullable=False, index=True)
+    run_at = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="running")  # running | success | error
+    output = Column(Text, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+
+
 Base.metadata.create_all(engine)
 
 VNC_FILES_DIR = "/data/vnc-files"
@@ -156,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.94"
+APP_VERSION = "1.6.95"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -2574,13 +2584,21 @@ async def _run_schedule_job(schedule_id: int):
         return
 
     run_at = datetime.datetime.now().isoformat(timespec="seconds")
+    start_ts = datetime.datetime.now().timestamp()
+
+    # Create a history row immediately (status=running)
+    run_row_id = None
     with Session() as db:
         sched = db.get(ScheduleRow, schedule_id)
         if sched:
             sched.last_run_at = run_at
             sched.last_run_status = "running"
             sched.last_run_output = ""
+            run_row = ScheduleRunRow(schedule_id=schedule_id, run_at=run_at, status="running")
+            db.add(run_row)
             db.commit()
+            db.refresh(run_row)
+            run_row_id = run_row.id
 
     def _sync_exec():
         lines = []
@@ -2615,12 +2633,22 @@ async def _run_schedule_job(schedule_id: int):
         output = str(exc)
         status = "error"
 
+    duration_ms = int((datetime.datetime.now().timestamp() - start_ts) * 1000)
+    truncated = output[-20000:]
+
     with Session() as db:
         sched = db.get(ScheduleRow, schedule_id)
         if sched:
             sched.last_run_status = status
-            sched.last_run_output = output[-20000:]
+            sched.last_run_output = truncated
             db.commit()
+        if run_row_id:
+            run_row = db.get(ScheduleRunRow, run_row_id)
+            if run_row:
+                run_row.status = status
+                run_row.output = truncated
+                run_row.duration_ms = duration_ms
+                db.commit()
     print(f"[Scheduler] schedule {schedule_id} finished status={status}")
 
 
@@ -2720,7 +2748,31 @@ def delete_schedule(schedule_id: int):
         row = db.get(ScheduleRow, schedule_id)
         if not row:
             raise HTTPException(404, "Not found")
+        db.query(ScheduleRunRow).filter(ScheduleRunRow.schedule_id == schedule_id).delete()
         db.delete(row)
+        db.commit()
+
+
+@app.get("/api/schedules/{schedule_id}/history")
+def get_schedule_history(schedule_id: int, limit: int = 100):
+    with Session() as db:
+        if not db.get(ScheduleRow, schedule_id):
+            raise HTTPException(404, "Not found")
+        rows = (db.query(ScheduleRunRow)
+                  .filter(ScheduleRunRow.schedule_id == schedule_id)
+                  .order_by(ScheduleRunRow.id.desc())
+                  .limit(limit)
+                  .all())
+        return [{"id": r.id, "run_at": r.run_at, "status": r.status,
+                 "duration_ms": r.duration_ms, "output": r.output} for r in rows]
+
+
+@app.delete("/api/schedules/{schedule_id}/history", status_code=204)
+def clear_schedule_history(schedule_id: int):
+    with Session() as db:
+        if not db.get(ScheduleRow, schedule_id):
+            raise HTTPException(404, "Not found")
+        db.query(ScheduleRunRow).filter(ScheduleRunRow.schedule_id == schedule_id).delete()
         db.commit()
 
 
