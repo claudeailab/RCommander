@@ -166,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.99"
+APP_VERSION = "1.6.100"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -2568,7 +2568,7 @@ def _row_dict(row) -> dict:
 
 
 def _resolve_schedule_exec(schedule_id: int):
-    """Return (server_host, server_port, server_type, username, password, private_key, command_text)
+    """Return (server_host, server_port, server_type, username, password, private_key, command_text, shell_type)
     or raise HTTPException if anything is missing."""
     with Session() as db:
         sched = db.get(ScheduleRow, schedule_id)
@@ -2581,7 +2581,6 @@ def _resolve_schedule_exec(schedule_id: int):
         # Credential resolution: schedule override → server default → folder hierarchy
         cred_id = sched.credential_id or server.credential_id
         if not cred_id and server.server_group:
-            # Walk folder path upward looking for a folder credential
             parts = server.server_group.split("/")
             for depth in range(len(parts), 0, -1):
                 folder_path = "/".join(parts[:depth])
@@ -2594,22 +2593,26 @@ def _resolve_schedule_exec(schedule_id: int):
 
         cred = db.get(CredentialRow, cred_id) if cred_id else None
         command_text = sched.command_text or ""
-        if not command_text and sched.command_id:
+        shell_type = "cmd"
+        if sched.command_id:
             cmd_row = db.get(CommandRow, sched.command_id)
-            command_text = cmd_row.command if cmd_row else ""
+            if cmd_row:
+                if not command_text:
+                    command_text = cmd_row.command or ""
+                shell_type = cmd_row.shell_type or "cmd"
         return (
             server.host, server.port, server.type,
             cred.username if cred else "",
             cred.password if cred else "",
             cred.private_key if cred else "",
             command_text,
+            shell_type,
         )
-
 
 async def _run_schedule_job(schedule_id: int):
     """Run one schedule entry, update last_run_* in DB."""
     try:
-        s_host, s_port, s_type, c_user, c_pass, c_key, command_text = \
+        s_host, s_port, s_type, c_user, c_pass, c_key, command_text, shell_type = \
             _resolve_schedule_exec(schedule_id)
     except HTTPException:
         return
@@ -2649,7 +2652,7 @@ async def _run_schedule_job(schedule_id: int):
                     elif t == "exit":
                         exit_code = d.get("code", 0)
             elif s_type == "winrm":
-                for ev in _winrm_stream(s_host, s_port, c_user, c_pass, command_text):
+                for ev in _winrm_stream(s_host, s_port, c_user, c_pass, command_text, shell_type):
                     if not ev.startswith("data: "):
                         continue
                     d = json.loads(ev[6:].strip())
@@ -2825,7 +2828,7 @@ def test_schedule(schedule_id: int):
     """Stream command output for a schedule as SSE (synchronous test run)."""
     def stream():
         try:
-            s_host, s_port, s_type, c_user, c_pass, c_key, command_text = \
+            s_host, s_port, s_type, c_user, c_pass, c_key, command_text, shell_type = \
                 _resolve_schedule_exec(schedule_id)
         except HTTPException as exc:
             yield _sse({"type": "error", "text": exc.detail})
@@ -2844,7 +2847,7 @@ def test_schedule(schedule_id: int):
         if s_type == "ssh":
             yield from _ssh_stream(s_host, s_port, c_user, c_pass, c_key, command_text)
         elif s_type == "winrm":
-            yield from _winrm_stream(s_host, s_port, c_user, c_pass, command_text)
+            yield from _winrm_stream(s_host, s_port, c_user, c_pass, command_text, shell_type)
         else:
             yield _sse({"type": "error", "text": f"Unsupported server type: {s_type}"})
 
