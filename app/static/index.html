@@ -3459,8 +3459,26 @@ function _buildScheduleModal(sched) {
 }
 
 function _scCmdChange() {
-  const v = document.getElementById('sc-command').value;
-  document.getElementById('sc-custom-cmd-wrap').style.display = v ? 'none' : '';
+  const cmdId = document.getElementById('sc-command').value;
+  document.getElementById('sc-custom-cmd-wrap').style.display = cmdId ? 'none' : '';
+
+  const cmd = state.commands.find(c => c.id == cmdId);
+  const serverSel = document.getElementById('sc-server');
+  const folderCont = document.getElementById('sc-folder-path');
+
+  if (cmd?.server_id) {
+    const linkedServer = state.servers.find(s => s.id === cmd.server_id);
+    _scPath = linkedServer?.server_group || null;
+    _renderScFolderPath();
+    _updateScServerOptions(cmd.server_id);
+    serverSel.value = cmd.server_id;
+    serverSel.disabled = true;
+    if (folderCont) folderCont.querySelectorAll('select').forEach(s => s.disabled = true);
+  } else {
+    serverSel.disabled = false;
+    if (folderCont) folderCont.querySelectorAll('select').forEach(s => s.disabled = false);
+    _renderScFolderPath();
+  }
 }
 
 function _scCronChange() {
@@ -3548,6 +3566,8 @@ function openScheduleModal(id) {
   overlay.classList.remove('hidden');
   _renderScFolderPath();
   if (sched?.server_id) _updateScServerOptions(sched.server_id);
+  // If the selected command has a linked server, apply lock state immediately
+  if (sched?.command_id) _scCmdChange();
   setTimeout(() => modalBox.querySelector('#sc-name')?.focus(), 50);
 }
 
