@@ -573,6 +573,73 @@
     text-align: left;
   }
   .dropdown-item:hover { background: #1f2937; }
+
+  /* ── Design token fills ── */
+  :root {
+    --bg2:   #111820;   /* used in RA server rows, bulk tree hover */
+    --input: #0d1117;   /* used in search inputs */
+    --fg:    #e6edf3;   /* alias for --text, used in bulk tree */
+  }
+
+  /* ── Small button variant ── */
+  .btn-sm { padding: 4px 8px; font-size: 12px; }
+
+  /* ── Warning / unlock button ── */
+  .btn-warn {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: none; border: 1px solid var(--warn); color: var(--warn);
+    border-radius: 6px; padding: 3px 10px; font-size: 12px;
+    cursor: pointer; font-weight: 600; transition: background .15s;
+  }
+  .btn-warn:hover { background: color-mix(in srgb, var(--warn) 12%, transparent); }
+
+  /* ── Modal body — flex column container for form groups ── */
+  .modal-body { display: flex; flex-direction: column; gap: 12px; }
+
+  /* ── Consistent panel section labels (SERVERS / COMMAND headings) ── */
+  .exec-panel h3,
+  .bulk-panel h3 {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .5px; color: var(--muted); margin-bottom: 6px;
+  }
+
+  /* ── Settings card section title ── */
+  .card-section-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 14px; }
+
+  /* ── Consistent search / filter input ── */
+  .search-field {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; color: var(--text);
+    font-size: 14px; font-family: inherit; outline: none; transition: border-color .15s;
+  }
+  .search-field:focus { border-color: var(--blue); }
+  .search-field-wrap { position: relative; }
+  .search-field-wrap .search-icon {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none;
+  }
+  .search-field-wrap .search-field { padding-left: 30px; }
+
+  /* ── Version in topbar (mobile only) ── */
+  .topbar-version { display: none; font-size: 11px; color: var(--muted); font-weight: 500; }
+  @media (max-width: 768px) {
+    .topbar-version { display: inline; }
+  }
+
+  /* ── History run row ── */
+  .history-run-row { border-bottom: 1px solid var(--border); }
+  .history-run-hdr {
+    display: flex; align-items: center; gap: 10px; padding: 10px 20px;
+    cursor: pointer; transition: background .15s;
+  }
+  .history-run-hdr:hover { background: #1a2030; }
+  .history-run-body {
+    display: none; padding: 0 20px 12px;
+    background: #0d1117; border-top: 1px solid var(--border);
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+    line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+    color: #e6edf3; max-height: 300px; overflow-y: auto;
+  }
+  .history-run-body.open { display: block; }
 </style>
 </head>
 <body>
@@ -581,7 +648,7 @@
 <div class="sidebar">
   <div class="logo">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M6 8l3 3-3 3"/><path d="M13 14h4"/></svg>
-    <span style="flex:1;display:flex;align-items:baseline;gap:8px">RCommander<span id="app-version" style="font-size:13px;font-weight:500;color:var(--text);opacity:.75"></span></span>
+    <span style="flex:1;display:flex;align-items:baseline;gap:8px">RCommander<span class="app-version-display" style="font-size:13px;font-weight:500;color:var(--text);opacity:.75"></span></span>
   </div>
   <nav>
     <div class="nav-item active" data-tab="execute">
@@ -610,7 +677,7 @@
 
 <!-- Mobile nav -->
 <div class="mobile-nav">
-  <div class="mobile-nav-inner">
+  <div class="mobile-nav-inner" id="mobile-nav-inner">
     <div class="mobile-nav-item active" data-tab="execute">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       Single
@@ -684,7 +751,7 @@
             <tr id="servers-group-filter-row">
               <td colspan="7" style="padding:8px 16px;background:#0d1117;border-bottom:1px solid var(--border)">
                 <input id="server-filter" placeholder="Filter by name, host or group…" oninput="renderServers()"
-                  style="max-width:320px;padding:5px 10px;font-size:12px">
+                  style="max-width:340px;font-size:16px">
               </td>
             </tr>
           </thead>
@@ -752,6 +819,7 @@
   <div id="tab-execute">
     <div class="topbar">
       <span class="page-title">Execute (Single)</span>
+      <span class="topbar-version app-version-display"></span>
     </div>
     <div class="content">
       <div class="execute-layout">
@@ -782,7 +850,7 @@
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                 Locked to: <span id="exec-command-server-name" style="color:#58a6ff;font-weight:500"></span>
               </span>
-              <button onclick="resetExecSelection()" style="background:none;border:1px solid var(--warn);color:var(--warn);border-radius:5px;padding:2px 9px;font-size:11px;cursor:pointer;font-weight:600;letter-spacing:.3px">✕ Unlock</button>
+              <button class="btn-warn" onclick="resetExecSelection()">✕ Unlock</button>
             </div>
           </div>
           <button class="btn btn-run" id="run-btn" onclick="runCommand()">
@@ -818,8 +886,7 @@
             </div>
           </div>
           <div style="margin:8px 0 6px">
-            <input id="bulk-server-search" type="text" placeholder="Filter servers…" oninput="renderBulkTree()"
-              style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--fg);font-size:13px;box-sizing:border-box">
+            <input id="bulk-server-search" type="text" placeholder="Filter servers…" oninput="renderBulkTree()" class="search-field">
           </div>
           <div class="bulk-tree" id="bulk-tree"></div>
           <div id="bulk-selection-count" style="margin-top:6px;font-size:12px;color:var(--muted)">0 servers selected</div>
@@ -858,13 +925,11 @@
   <div id="tab-remote-access" style="display:none">
     <div class="topbar"><span class="page-title">Remote Access</span></div>
     <div class="content" style="max-width:900px">
-      <div style="margin-bottom:12px;position:relative">
-        <input id="ra-search" type="text" placeholder="Search servers…" oninput="renderRemoteAccess()"
-          style="width:100%;padding:7px 10px 7px 30px;background:var(--input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2.5"
-          style="position:absolute;left:10px;top:50%;transform:translateY(-50%);pointer-events:none">
+      <div class="search-field-wrap" style="margin-bottom:12px">
+        <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2.5">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
+        <input id="ra-search" type="text" placeholder="Search servers…" oninput="renderRemoteAccess()" class="search-field">
       </div>
       <div id="ra-tree" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"></div>
     </div>
@@ -878,7 +943,7 @@
     </div>
     <div class="content" style="max-width:700px">
       <div class="card" style="padding:20px;margin-bottom:16px">
-        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">Upload File</div>
+        <div class="card-section-title">Upload File</div>
         <div class="form-group">
           <label>Name</label>
           <input id="vf-name" placeholder="My DSM Plugin">
@@ -933,7 +998,7 @@
     <div class="topbar"><span class="page-title">RDP Settings</span></div>
     <div class="content" style="max-width:520px">
       <div class="card" style="padding:20px">
-        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Connection</div>
+        <div class="card-section-title">Connection</div>
         <div class="form-row">
           <div class="form-group">
             <label>Security Mode</label>
@@ -951,7 +1016,7 @@
         </div>
       </div>
       <div class="card" style="padding:20px;margin-top:12px">
-        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Display</div>
+        <div class="card-section-title">Display</div>
         <div class="form-row">
           <div class="form-group">
             <label>Resolution</label>
@@ -1005,7 +1070,7 @@
         </div>
       </div>
       <div class="card" style="padding:20px;margin-top:12px">
-        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Experience</div>
+        <div class="card-section-title">Experience</div>
         <div style="display:flex;flex-direction:column;gap:10px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
             <input type="checkbox" id="rdp-default-wallpaper" style="width:auto;margin:0" checked>
@@ -1030,7 +1095,7 @@
         </div>
       </div>
       <div class="card" style="padding:20px;margin-top:12px">
-        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Input</div>
+        <div class="card-section-title">Input</div>
         <div class="form-group">
           <label>Cursor</label>
           <select id="rdp-default-cursor">
@@ -1052,7 +1117,7 @@
     <div class="topbar"><span class="page-title">SSH Settings</span></div>
     <div class="content" style="max-width:520px">
       <div class="card" style="padding:20px">
-        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:16px">Default SSH Options</div>
+        <div class="card-section-title">Default SSH Options</div>
         <div class="form-group">
           <label>Default Port</label>
           <input id="ssh-default-port" type="number" value="22" min="1" max="65535" style="max-width:120px">
@@ -1089,14 +1154,10 @@
       <button class="modal-close" onclick="closeScheduleOutput()">×</button>
     </div>
     <div style="padding:12px 20px 20px">
-      <div id="schedule-output-term" style="
-        background:#0d1117;border:1px solid var(--border);border-radius:6px;
-        font-family:'Courier New',Courier,monospace;font-size:12.5px;line-height:1.5;
-        padding:14px;min-height:200px;max-height:60vh;overflow-y:auto;
-        white-space:pre-wrap;word-break:break-all;color:#e6edf3"></div>
+      <div id="schedule-output-term" class="terminal" style="min-height:200px;max-height:60vh;font-size:12.5px;white-space:pre-wrap;word-break:break-all"></div>
       <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
         <span id="schedule-output-status" style="font-size:13px;color:var(--muted)"></span>
-        <button class="btn btn-ghost" style="margin-left:auto" onclick="closeScheduleOutput()">Close</button>
+        <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="closeScheduleOutput()">Close</button>
       </div>
     </div>
   </div>
@@ -1158,12 +1219,9 @@ async function loadAll() {
     api('GET', '/api/version'),
     api('GET', '/api/vnc-files'),
   ]);
-  const vEl = document.getElementById('app-version');
   if (versionData?.version) {
     const v = 'v' + versionData.version;
-    if (vEl) vEl.textContent = v;
-    const mEl = document.getElementById('app-version-mobile');
-    if (mEl) mEl.textContent = v;
+    document.querySelectorAll('.app-version-display').forEach(el => { el.textContent = v; });
   }
   state.servers           = servers;
   state.credentials       = credentials;
@@ -3162,7 +3220,10 @@ function renderVncFiles() {
   const tbody = document.getElementById('vnc-files-body');
   if (!tbody) return;
   if (!state.vncFiles.length) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--muted)">No files uploaded yet</td></tr>`;
+    tbody.innerHTML = emptyRow(5,
+      '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+      'No files uploaded yet.'
+    );
     return;
   }
   tbody.innerHTML = state.vncFiles.map(f => `
@@ -3744,21 +3805,15 @@ async function _loadHistoryRuns() {
       const statusColor = r.status === 'success' ? 'var(--accent-h)' : r.status === 'running' ? 'var(--accent)' : 'var(--danger)';
       const dur = r.duration_ms != null ? (r.duration_ms >= 1000 ? `${(r.duration_ms/1000).toFixed(1)}s` : `${r.duration_ms}ms`) : '';
       const rid = `hr-${r.id}`;
-      return `<div style="border-bottom:1px solid var(--border);padding:12px 20px">
-        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="toggleHistoryRow('${rid}')">
+      return `<div class="history-run-row">
+        <div class="history-run-hdr" onclick="toggleHistoryRow('${rid}')">
           <span style="width:8px;height:8px;border-radius:50%;background:${statusColor};flex-shrink:0;display:inline-block"></span>
           <span style="font-size:13px;font-weight:500;flex:1">${r.run_at || '—'}</span>
           ${dur ? `<span style="font-size:12px;color:var(--muted)">${dur}</span>` : ''}
           <span style="font-size:12px;font-weight:600;color:${statusColor};text-transform:uppercase">${r.status}</span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--muted);flex-shrink:0"><polyline points="6 9 12 15 18 9"/></svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--muted);flex-shrink:0;transition:transform .2s"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
-        <div id="${rid}" style="display:none;margin-top:10px">
-          <div style="
-            background:#0d1117;border:1px solid var(--border);border-radius:6px;
-            font-family:'Courier New',Courier,monospace;font-size:12px;line-height:1.5;
-            padding:12px;max-height:300px;overflow-y:auto;
-            white-space:pre-wrap;word-break:break-all;color:#e6edf3">${escape(r.output || '(no output)')}</div>
-        </div>
+        <div id="${rid}" class="history-run-body">${escape(r.output || '(no output)')}</div>
       </div>`;
     }).join('');
   } catch (e) {
@@ -3769,11 +3824,10 @@ async function _loadHistoryRuns() {
 function toggleHistoryRow(id) {
   const el = document.getElementById(id);
   if (!el) return;
-  const open = el.style.display !== 'none';
-  el.style.display = open ? 'none' : '';
+  const open = el.classList.toggle('open');
   const row = el.previousElementSibling;
   const chevron = row?.querySelector('svg:last-child');
-  if (chevron) chevron.style.transform = open ? '' : 'rotate(180deg)';
+  if (chevron) chevron.style.transform = open ? 'rotate(180deg)' : '';
 }
 
 async function clearScheduleHistory() {

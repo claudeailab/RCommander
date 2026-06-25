@@ -166,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.104"
+APP_VERSION = "1.6.105"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
