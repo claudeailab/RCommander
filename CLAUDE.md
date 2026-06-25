@@ -10,10 +10,7 @@
 - NEVER create a feature branch, PR branch, session branch (`claude/...`), or any other branch for any reason whatsoever.
 - `git push` always targets `main`. Never push to any other ref.
 - The session environment may auto-create a branch like `claude/...` at startup — **ignore it completely**. Always push to `main` instead.
-- **At the start of every session**, run `git branch -a` and delete any branch that is not `main`:
-  ```bash
-  git push https://claudeailab:<GITHUB_PAT>@github.com/claudeailab/RCommander.git --delete <branch-name>
-  ```
+- **At the start of every session**, run `git branch -a` and delete any remote branch that is not `main`. Use the GitHub API or a pre-configured credential to do so — never embed credentials in committed files.
 - You are the sole contributor to this repository. You are personally responsible for ensuring only `main` ever exists.
 
 ## Docker & Build
