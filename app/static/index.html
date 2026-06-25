@@ -3400,17 +3400,17 @@ function renderSchedules() {
       : `<span style="font-size:10px;font-weight:700;color:var(--muted);background:color-mix(in srgb,var(--muted) 12%,transparent);padding:1px 6px;border-radius:20px;flex-shrink:0">OFF</span>`;
     const lastRun = s.last_run_at
       ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--muted);white-space:nowrap">${dot}${relTime(s.last_run_at)}</span>` : '';
-    return `<div class="card" style="margin-bottom:8px">
-      <div style="padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span style="font-size:14px;font-weight:600;color:var(--text);white-space:nowrap">${escape(s.name)}</span>
+    return `<div class="card" style="margin-bottom:8px;padding:10px 14px">
+      <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px">${escape(s.name)}</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         ${enabledBadge}
-        <span style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px;white-space:nowrap">
+        <span style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:3px;white-space:nowrap">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>${escape(serverName(s.server_id))}
         </span>
-        <span style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">
+        <span style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:3px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>${escape(commandLabel(s))}
         </span>
-        <span style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px;white-space:nowrap">
+        <span style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:3px;white-space:nowrap">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${escape(cronLabel(s.cron_expr))}
         </span>
         <div style="display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0">
