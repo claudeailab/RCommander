@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import hashlib
 import io
 import json
@@ -96,6 +97,22 @@ class VncFileRow(Base):
     description = Column(Text, default="")
 
 
+class ScheduleRow(Base):
+    __tablename__ = "schedules"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+    server_id = Column(Integer, nullable=False)
+    credential_id = Column(Integer, nullable=True)
+    command_id = Column(Integer, nullable=True)
+    command_text = Column(Text, default="")
+    cron_expr = Column(String, nullable=False, default="0 * * * *")
+    enabled = Column(Integer, nullable=False, default=1)
+    last_run_at = Column(String, nullable=True)
+    last_run_status = Column(String, nullable=True)   # success | error | running
+    last_run_output = Column(Text, nullable=True)
+    created_at = Column(String, nullable=False, default="")
+
+
 Base.metadata.create_all(engine)
 
 VNC_FILES_DIR = "/data/vnc-files"
@@ -120,6 +137,13 @@ def _migrate():
                                ("connection_types",               "TEXT NOT NULL DEFAULT ''"),
                                ("vnc_dsm_file_id",                "INTEGER"),
                                ("vnc_client_key_file_id",         "INTEGER")],
+        "schedules":          [("credential_id",     "INTEGER"),
+                               ("command_id",        "INTEGER"),
+                               ("command_text",      "TEXT NOT NULL DEFAULT ''"),
+                               ("last_run_at",       "TEXT"),
+                               ("last_run_status",   "TEXT"),
+                               ("last_run_output",   "TEXT"),
+                               ("created_at",        "TEXT NOT NULL DEFAULT ''")],
     }
     with engine.connect() as conn:
         for table, columns in migrations.items():
@@ -132,7 +156,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.91"
+APP_VERSION = "1.6.92"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -598,6 +622,26 @@ class ExecuteRequest(BaseModel):
     server_id: int
     credential_id: int
     command_id: int
+
+
+class ScheduleIn(BaseModel):
+    name: str
+    server_id: int
+    credential_id: Optional[int] = None
+    command_id: Optional[int] = None
+    command_text: str = ""
+    cron_expr: str = "0 * * * *"
+    enabled: bool = True
+
+
+class ScheduleUpdate(BaseModel):
+    name: Optional[str] = None
+    server_id: Optional[int] = None
+    credential_id: Optional[int] = None
+    command_id: Optional[int] = None
+    command_text: Optional[str] = None
+    cron_expr: Optional[str] = None
+    enabled: Optional[bool] = None
 
 
 class ImportResult(BaseModel):
@@ -2485,6 +2529,233 @@ def delete_vnc_file(file_id: int):
     path = os.path.join(VNC_FILES_DIR, f"{file_id}.bin")
     if os.path.exists(path):
         os.remove(path)
+
+
+# ── Schedules ─────────────────────────────────────────────────────────────────
+
+def _row_dict(row) -> dict:
+    return {c.name: getattr(row, c.name) for c in row.__table__.columns}
+
+
+def _resolve_schedule_exec(schedule_id: int):
+    """Return (server_host, server_port, server_type, username, password, private_key, command_text)
+    or raise HTTPException if anything is missing."""
+    with Session() as db:
+        sched = db.get(ScheduleRow, schedule_id)
+        if not sched:
+            raise HTTPException(404, "Schedule not found")
+        server = db.get(ServerRow, sched.server_id)
+        if not server:
+            raise HTTPException(404, "Server not found")
+        cred_id = sched.credential_id or server.credential_id
+        cred = db.get(CredentialRow, cred_id) if cred_id else None
+        command_text = sched.command_text or ""
+        if not command_text and sched.command_id:
+            cmd_row = db.get(CommandRow, sched.command_id)
+            command_text = cmd_row.command if cmd_row else ""
+        return (
+            server.host, server.port, server.type,
+            cred.username if cred else "",
+            cred.password if cred else "",
+            cred.private_key if cred else "",
+            command_text,
+        )
+
+
+async def _run_schedule_job(schedule_id: int):
+    """Run one schedule entry, update last_run_* in DB."""
+    try:
+        s_host, s_port, s_type, c_user, c_pass, c_key, command_text = \
+            _resolve_schedule_exec(schedule_id)
+    except HTTPException:
+        return
+
+    if not command_text:
+        return
+
+    run_at = datetime.datetime.now().isoformat(timespec="seconds")
+    with Session() as db:
+        sched = db.get(ScheduleRow, schedule_id)
+        if sched:
+            sched.last_run_at = run_at
+            sched.last_run_status = "running"
+            sched.last_run_output = ""
+            db.commit()
+
+    def _sync_exec():
+        lines = []
+        exit_code = 0
+        try:
+            if s_type == "ssh":
+                for ev in _ssh_stream(s_host, s_port, c_user, c_pass, c_key, command_text):
+                    if not ev.startswith("data: "):
+                        continue
+                    d = json.loads(ev[6:].strip())
+                    t = d.get("type")
+                    if t in ("stdout", "stderr", "error"):
+                        lines.append(d.get("text", ""))
+                    elif t == "exit":
+                        exit_code = d.get("code", 0)
+            elif s_type == "winrm":
+                for ev in _winrm_stream(s_host, s_port, c_user, c_pass, command_text):
+                    if not ev.startswith("data: "):
+                        continue
+                    d = json.loads(ev[6:].strip())
+                    if d.get("type") in ("stdout", "stderr", "error"):
+                        lines.append(d.get("text", ""))
+        except Exception as exc:
+            lines.append(str(exc))
+            exit_code = 1
+        return "".join(lines), exit_code
+
+    try:
+        output, exit_code = await asyncio.to_thread(_sync_exec)
+        status = "success" if exit_code == 0 else "error"
+    except Exception as exc:
+        output = str(exc)
+        status = "error"
+
+    with Session() as db:
+        sched = db.get(ScheduleRow, schedule_id)
+        if sched:
+            sched.last_run_status = status
+            sched.last_run_output = output[-20000:]
+            db.commit()
+    print(f"[Scheduler] schedule {schedule_id} finished status={status}")
+
+
+async def _tick_schedules():
+    """Called once per minute: fire any schedules due right now."""
+    try:
+        from croniter import croniter as _Croniter
+    except ImportError:
+        return
+
+    now = datetime.datetime.now().replace(second=0, microsecond=0)
+    base = now - datetime.timedelta(minutes=1)
+
+    with Session() as db:
+        due = []
+        for sched in db.query(ScheduleRow).filter(ScheduleRow.enabled == 1).all():
+            try:
+                cr = _Croniter(sched.cron_expr, base)
+                if cr.get_next(datetime.datetime).replace(second=0, microsecond=0) == now:
+                    due.append(sched.id)
+            except Exception:
+                pass
+
+    for sid in due:
+        asyncio.create_task(_run_schedule_job(sid))
+        print(f"[Scheduler] triggered schedule {sid}")
+
+
+async def _scheduler_loop():
+    """Background task: wake at the top of each minute and tick schedules."""
+    while True:
+        now = datetime.datetime.now()
+        # Sleep until 1 s into the next minute so we don't drift
+        wait = 61 - now.second - now.microsecond / 1_000_000
+        await asyncio.sleep(wait)
+        await _tick_schedules()
+
+
+@app.on_event("startup")
+async def _startup():
+    asyncio.create_task(_scheduler_loop())
+
+
+@app.get("/api/schedules")
+def list_schedules():
+    with Session() as db:
+        rows = db.query(ScheduleRow).order_by(ScheduleRow.name).all()
+        return [_row_dict(r) for r in rows]
+
+
+@app.post("/api/schedules", status_code=201)
+def create_schedule(data: ScheduleIn):
+    with Session() as db:
+        row = ScheduleRow(
+            name=data.name,
+            server_id=data.server_id,
+            credential_id=data.credential_id,
+            command_id=data.command_id,
+            command_text=data.command_text or "",
+            cron_expr=data.cron_expr,
+            enabled=1 if data.enabled else 0,
+            created_at=datetime.datetime.now().isoformat(timespec="seconds"),
+        )
+        db.add(row)
+        try:
+            db.commit()
+            db.refresh(row)
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, "Schedule name already exists")
+        return _row_dict(row)
+
+
+@app.put("/api/schedules/{schedule_id}")
+def update_schedule(schedule_id: int, data: ScheduleUpdate):
+    with Session() as db:
+        row = db.get(ScheduleRow, schedule_id)
+        if not row:
+            raise HTTPException(404, "Not found")
+        for field, val in data.model_dump(exclude_none=True).items():
+            if field == "enabled":
+                setattr(row, field, 1 if val else 0)
+            else:
+                setattr(row, field, val)
+        try:
+            db.commit()
+            db.refresh(row)
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, "Schedule name already exists")
+        return _row_dict(row)
+
+
+@app.delete("/api/schedules/{schedule_id}", status_code=204)
+def delete_schedule(schedule_id: int):
+    with Session() as db:
+        row = db.get(ScheduleRow, schedule_id)
+        if not row:
+            raise HTTPException(404, "Not found")
+        db.delete(row)
+        db.commit()
+
+
+@app.post("/api/schedules/{schedule_id}/run", status_code=202)
+async def trigger_schedule(schedule_id: int):
+    """Immediately trigger a schedule run (async, non-blocking)."""
+    with Session() as db:
+        if not db.get(ScheduleRow, schedule_id):
+            raise HTTPException(404, "Not found")
+    asyncio.create_task(_run_schedule_job(schedule_id))
+    return {"queued": True}
+
+
+@app.get("/api/schedules/{schedule_id}/test")
+def test_schedule(schedule_id: int):
+    """Stream command output for a schedule as SSE (synchronous test run)."""
+    s_host, s_port, s_type, c_user, c_pass, c_key, command_text = \
+        _resolve_schedule_exec(schedule_id)
+
+    if not command_text:
+        def _empty():
+            yield _sse({"type": "error", "text": "No command configured"})
+            yield _sse({"type": "done"})
+        return StreamingResponse(_empty(), media_type="text/event-stream")
+
+    def stream():
+        if s_type == "ssh":
+            yield from _ssh_stream(s_host, s_port, c_user, c_pass, c_key, command_text)
+        elif s_type == "winrm":
+            yield from _winrm_stream(s_host, s_port, c_user, c_pass, command_text)
+        else:
+            yield _sse({"type": "error", "text": f"Unsupported server type: {s_type}"})
+            yield _sse({"type": "done"})
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 # ── Health & static ───────────────────────────────────────────────────────────

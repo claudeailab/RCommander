@@ -596,6 +596,10 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       <span class="nav-label">Remote Access</span>
     </div>
+    <div class="nav-item" data-tab="schedule">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="8" cy="15" r="1" fill="currentColor"/><circle cx="12" cy="15" r="1" fill="currentColor"/></svg>
+      <span class="nav-label">Schedule</span>
+    </div>
     <div class="nav-item" data-tab="settings">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       <span class="nav-label">Settings</span>
@@ -618,6 +622,10 @@
     <div class="mobile-nav-item" data-tab="remote-access">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       Remote
+    </div>
+    <div class="mobile-nav-item" data-tab="schedule">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      Schedule
     </div>
     <div class="mobile-nav-item" data-tab="settings">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -1058,6 +1066,52 @@
   </div>
 </main>
 
+<!-- SCHEDULE -->
+<div id="tab-schedule" style="display:none">
+  <div class="topbar">
+    <span class="page-title">Schedule</span>
+    <button class="btn btn-primary" onclick="openScheduleModal()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New Schedule
+    </button>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr>
+        <th>Name</th>
+        <th>Server</th>
+        <th>Command</th>
+        <th>Schedule</th>
+        <th>Status</th>
+        <th>Last Run</th>
+        <th style="width:120px"></th>
+      </tr></thead>
+      <tbody id="schedule-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Schedule run output overlay -->
+<div class="overlay hidden" id="schedule-output-overlay" onclick="closeScheduleOutput(event)">
+  <div class="modal" id="schedule-output-modal" style="max-width:760px;width:95vw">
+    <div class="modal-header">
+      <span class="modal-title" id="schedule-output-title">Test Run</span>
+      <button class="modal-close" onclick="closeScheduleOutput()">×</button>
+    </div>
+    <div style="padding:12px 20px 20px">
+      <div id="schedule-output-term" style="
+        background:#0d1117;border:1px solid var(--border);border-radius:6px;
+        font-family:'Courier New',Courier,monospace;font-size:12.5px;line-height:1.5;
+        padding:14px;min-height:200px;max-height:60vh;overflow-y:auto;
+        white-space:pre-wrap;word-break:break-all;color:#e6edf3"></div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+        <span id="schedule-output-status" style="font-size:13px;color:var(--muted)"></span>
+        <button class="btn btn-ghost" style="margin-left:auto" onclick="closeScheduleOutput()">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Modal overlay -->
 <div class="overlay hidden" id="overlay" onclick="closeModalOutside(event)">
   <div class="modal" id="modal-box">
@@ -1069,7 +1123,7 @@
 <div class="toast-container" id="toasts"></div>
 
 <script>
-const state = { servers: [], credentials: [], commands: [], groups: [], folderCredentials: [], vncFiles: [] };
+const state = { servers: [], credentials: [], commands: [], groups: [], folderCredentials: [], vncFiles: [], schedules: [] };
 
 const overlay  = document.getElementById('overlay');
 const modalBox = document.getElementById('modal-box');
@@ -1121,6 +1175,7 @@ async function loadAll() {
   refreshBulkCmdDropdown();
   renderRemoteAccess();
   renderVncFiles();
+  await loadSchedules();
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -3261,10 +3316,282 @@ function getSshDefaultSettings() {
   catch (_) { return {}; }
 }
 
+// ── Schedule ──────────────────────────────────────────────────────────────────
+
+const CRON_PRESETS = [
+  { label: 'Every minute',      value: '* * * * *' },
+  { label: 'Every 5 minutes',   value: '*/5 * * * *' },
+  { label: 'Every 15 minutes',  value: '*/15 * * * *' },
+  { label: 'Every 30 minutes',  value: '*/30 * * * *' },
+  { label: 'Every hour',        value: '0 * * * *' },
+  { label: 'Every 2 hours',     value: '0 */2 * * *' },
+  { label: 'Every 6 hours',     value: '0 */6 * * *' },
+  { label: 'Every 12 hours',    value: '0 */12 * * *' },
+  { label: 'Daily at midnight', value: '0 0 * * *' },
+  { label: 'Daily at noon',     value: '0 12 * * *' },
+  { label: 'Weekly (Monday)',   value: '0 0 * * 1' },
+  { label: 'Monthly (1st)',     value: '0 0 1 * *' },
+  { label: 'Custom cron…',      value: '__custom__' },
+];
+
+function cronLabel(expr) {
+  const p = CRON_PRESETS.find(x => x.value === expr);
+  return p && p.value !== '__custom__' ? p.label : expr;
+}
+
+function relTime(iso) {
+  if (!iso) return '—';
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (diff < 60)  return 'just now';
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+function statusBadge(status) {
+  if (!status) return '<span style="color:var(--muted);font-size:12px">—</span>';
+  const map = { success: ['#2ea043','Success'], error: ['#da3633','Error'], running: ['#388bfd','Running'] };
+  const [color, label] = map[status] || ['var(--muted)', status];
+  return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;color:${color}">
+    <span style="width:7px;height:7px;border-radius:50%;background:${color};display:inline-block"></span>${label}</span>`;
+}
+
+function serverName(id) {
+  const s = state.servers.find(x => x.id === id);
+  return s ? escape(s.name) : `#${id}`;
+}
+
+function commandLabel(sched) {
+  if (sched.command_id) {
+    const c = state.commands.find(x => x.id === sched.command_id);
+    return c ? escape(c.name) : `cmd#${sched.command_id}`;
+  }
+  if (sched.command_text) return escape(sched.command_text.slice(0, 40) + (sched.command_text.length > 40 ? '…' : ''));
+  return '<span style="color:var(--muted)">—</span>';
+}
+
+async function loadSchedules() {
+  state.schedules = await api('GET', '/api/schedules');
+  renderSchedules();
+}
+
+function renderSchedules() {
+  const tbody = document.getElementById('schedule-tbody');
+  if (!tbody) return;
+  if (!state.schedules || !state.schedules.length) {
+    tbody.innerHTML = emptyRow(7,
+      '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+      'No schedules yet. Create one to run commands automatically.');
+    return;
+  }
+  tbody.innerHTML = state.schedules.map(s => `
+    <tr>
+      <td><strong>${escape(s.name)}</strong>${s.enabled ? '' : ' <span style="color:var(--muted);font-size:11px">(disabled)</span>'}</td>
+      <td>${serverName(s.server_id)}</td>
+      <td>${commandLabel(s)}</td>
+      <td style="font-size:12px;color:var(--muted)">${escape(cronLabel(s.cron_expr))}</td>
+      <td>${statusBadge(s.last_run_status)}</td>
+      <td style="font-size:12px;color:var(--muted)">${relTime(s.last_run_at)}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" title="View last output" onclick="viewScheduleOutput(${s.id})" ${s.last_run_output ? '' : 'disabled'}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <button class="btn btn-ghost btn-sm" title="Test run" onclick="testScheduleRun(${s.id},'${escape(s.name)}')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>
+        <button class="btn btn-ghost btn-sm" title="Edit" onclick="openScheduleModal(${s.id})">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <button class="btn btn-ghost btn-sm" title="Delete" onclick="deleteSchedule(${s.id},'${escape(s.name)}')" style="color:var(--danger)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        </button>
+      </td>
+    </tr>`).join('');
+}
+
+function _buildScheduleModal(sched) {
+  const isEdit = !!sched;
+  const cronVal = sched?.cron_expr || '0 * * * *';
+  const isCustomCron = !CRON_PRESETS.some(p => p.value === cronVal && p.value !== '__custom__');
+
+  const serverOpts = state.servers.map(s =>
+    `<option value="${s.id}" ${sched?.server_id === s.id ? 'selected' : ''}>${escape(s.name)}</option>`).join('');
+
+  const credOpts = `<option value="">— use server default —</option>` +
+    state.credentials.map(c =>
+      `<option value="${c.id}" ${sched?.credential_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('');
+
+  const cmdOpts = `<option value="">— custom command —</option>` +
+    state.commands.map(c =>
+      `<option value="${c.id}" ${sched?.command_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('');
+
+  const cronOpts = CRON_PRESETS.map(p =>
+    `<option value="${p.value}" ${(!isCustomCron && cronVal === p.value) || (isCustomCron && p.value === '__custom__') ? 'selected' : ''}>${p.label}</option>`).join('');
+
+  return `
+    ${modalHeader(isEdit ? 'Edit Schedule' : 'New Schedule')}
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Name</label>
+        <input class="form-input" id="sc-name" value="${escape(sched?.name || '')}" placeholder="Daily backup"></div>
+      <div class="form-group"><label class="form-label">Server</label>
+        <select class="form-input" id="sc-server">${serverOpts}</select></div>
+      <div class="form-group"><label class="form-label">Credential <span style="color:var(--muted);font-size:12px">(optional)</span></label>
+        <select class="form-input" id="sc-credential">${credOpts}</select></div>
+      <div class="form-group"><label class="form-label">Command</label>
+        <select class="form-input" id="sc-command" onchange="_scCmdChange()">${cmdOpts}</select></div>
+      <div class="form-group" id="sc-custom-cmd-wrap" style="${sched?.command_id ? 'display:none' : ''}">
+        <label class="form-label">Custom command</label>
+        <textarea class="form-input" id="sc-cmd-text" rows="3" style="font-family:monospace;resize:vertical" placeholder="e.g. df -h">${escape(sched?.command_text || '')}</textarea>
+      </div>
+      <div class="form-group"><label class="form-label">Schedule</label>
+        <select class="form-input" id="sc-cron-preset" onchange="_scCronChange()">${cronOpts}</select></div>
+      <div class="form-group" id="sc-custom-cron-wrap" style="${isCustomCron ? '' : 'display:none'}">
+        <label class="form-label">Cron expression <span style="color:var(--muted);font-size:12px">minute hour day month weekday</span></label>
+        <input class="form-input" id="sc-cron-custom" style="font-family:monospace" value="${isCustomCron ? escape(cronVal) : ''}" placeholder="*/30 * * * *"></div>
+      <div class="form-group" style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" id="sc-enabled" ${sched?.enabled !== 0 ? 'checked' : ''} style="width:16px;height:16px">
+        <label for="sc-enabled" class="form-label" style="margin:0">Enabled</label>
+      </div>
+    </div>
+    ${modalFooter('saveSchedule')}`;
+}
+
+function _scCmdChange() {
+  const v = document.getElementById('sc-command').value;
+  document.getElementById('sc-custom-cmd-wrap').style.display = v ? 'none' : '';
+}
+
+function _scCronChange() {
+  const v = document.getElementById('sc-cron-preset').value;
+  document.getElementById('sc-custom-cron-wrap').style.display = v === '__custom__' ? '' : 'none';
+}
+
+let _scheduleEditId = null;
+
+function openScheduleModal(id) {
+  _scheduleEditId = id || null;
+  const sched = id ? state.schedules.find(x => x.id === id) : null;
+  modalBox.innerHTML = _buildScheduleModal(sched);
+  overlay.classList.remove('hidden');
+  setTimeout(() => modalBox.querySelector('#sc-name')?.focus(), 50);
+}
+
+async function saveSchedule() {
+  const name = document.getElementById('sc-name').value.trim();
+  const server_id = parseInt(document.getElementById('sc-server').value);
+  const credential_id = document.getElementById('sc-credential').value ? parseInt(document.getElementById('sc-credential').value) : null;
+  const cmd_sel = document.getElementById('sc-command').value;
+  const command_id = cmd_sel ? parseInt(cmd_sel) : null;
+  const command_text = document.getElementById('sc-cmd-text')?.value?.trim() || '';
+  const cronPreset = document.getElementById('sc-cron-preset').value;
+  const cron_expr = cronPreset === '__custom__' ? (document.getElementById('sc-cron-custom')?.value?.trim() || '') : cronPreset;
+  const enabled = document.getElementById('sc-enabled').checked;
+
+  if (!name)       return toast('Name is required', 'fail');
+  if (!server_id)  return toast('Server is required', 'fail');
+  if (!command_id && !command_text) return toast('Command is required', 'fail');
+  if (!cron_expr)  return toast('Schedule is required', 'fail');
+
+  const payload = { name, server_id, credential_id, command_id, command_text, cron_expr, enabled };
+  try {
+    if (_scheduleEditId) {
+      await api('PUT', `/api/schedules/${_scheduleEditId}`, payload);
+      toast('Schedule updated');
+    } else {
+      await api('POST', '/api/schedules', payload);
+      toast('Schedule created');
+    }
+    closeModal();
+    await loadSchedules();
+  } catch (e) {
+    toast(e.message, 'fail');
+  }
+}
+
+async function deleteSchedule(id, name) {
+  if (!confirm(`Delete schedule "${name}"?`)) return;
+  try {
+    await api('DELETE', `/api/schedules/${id}`);
+    toast('Schedule deleted');
+    await loadSchedules();
+  } catch (e) {
+    toast(e.message, 'fail');
+  }
+}
+
+let _scheduleOutputEvt = null;
+
+function closeScheduleOutput(e) {
+  if (e && e.target !== document.getElementById('schedule-output-overlay')) return;
+  if (_scheduleOutputEvt) { _scheduleOutputEvt.close(); _scheduleOutputEvt = null; }
+  document.getElementById('schedule-output-overlay').classList.add('hidden');
+}
+
+function viewScheduleOutput(id) {
+  const s = state.schedules.find(x => x.id === id);
+  if (!s) return;
+  const overlay2 = document.getElementById('schedule-output-overlay');
+  const term = document.getElementById('schedule-output-term');
+  document.getElementById('schedule-output-title').textContent = `Last Output — ${s.name}`;
+  term.textContent = s.last_run_output || '(no output)';
+  document.getElementById('schedule-output-status').textContent =
+    s.last_run_status ? `Status: ${s.last_run_status}` + (s.last_run_at ? ` · ${s.last_run_at}` : '') : '';
+  overlay2.classList.remove('hidden');
+  term.scrollTop = term.scrollHeight;
+}
+
+function testScheduleRun(id, name) {
+  if (_scheduleOutputEvt) { _scheduleOutputEvt.close(); _scheduleOutputEvt = null; }
+  const overlay2 = document.getElementById('schedule-output-overlay');
+  const term = document.getElementById('schedule-output-term');
+  const statusEl = document.getElementById('schedule-output-status');
+  document.getElementById('schedule-output-title').textContent = `Test Run — ${name}`;
+  term.textContent = '';
+  statusEl.textContent = 'Running…';
+  overlay2.classList.remove('hidden');
+
+  const es = new EventSource(`/api/schedules/${id}/test`);
+  _scheduleOutputEvt = es;
+  let exitCode = null;
+
+  es.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'stdout' || d.type === 'stderr') {
+      term.textContent += d.text;
+      term.scrollTop = term.scrollHeight;
+    } else if (d.type === 'error') {
+      term.textContent += '\n[error] ' + d.text;
+      term.scrollTop = term.scrollHeight;
+    } else if (d.type === 'exit') {
+      exitCode = d.code;
+    } else if (d.type === 'done') {
+      es.close();
+      _scheduleOutputEvt = null;
+      const ok = exitCode === 0 || exitCode === null;
+      statusEl.textContent = exitCode !== null ? `Exited with code ${exitCode}` : 'Done';
+      statusEl.style.color = ok ? 'var(--accent-h)' : 'var(--danger)';
+      loadSchedules();
+    }
+  };
+  es.onerror = () => {
+    es.close();
+    _scheduleOutputEvt = null;
+    if (!term.textContent.trim()) term.textContent = '(connection error)';
+    statusEl.textContent = 'Connection failed';
+    statusEl.style.color = 'var(--danger)';
+  };
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 loadAll().catch(e => toast('Failed to load data: ' + e.message, 'fail'));
 loadProtocolSettings();
+
+// Refresh schedule status every 30 seconds while on the Schedule tab
+setInterval(() => {
+  const tab = document.querySelector('#tab-schedule');
+  if (tab && tab.style.display !== 'none') loadSchedules().catch(() => {});
+}, 30000);
 </script>
 </body>
 </html>
