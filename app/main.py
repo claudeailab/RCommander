@@ -166,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.97"
+APP_VERSION = "1.6.98"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -2823,23 +2823,32 @@ async def trigger_schedule(schedule_id: int):
 @app.get("/api/schedules/{schedule_id}/test")
 def test_schedule(schedule_id: int):
     """Stream command output for a schedule as SSE (synchronous test run)."""
-    s_host, s_port, s_type, c_user, c_pass, c_key, command_text = \
-        _resolve_schedule_exec(schedule_id)
+    def stream():
+        try:
+            s_host, s_port, s_type, c_user, c_pass, c_key, command_text = \
+                _resolve_schedule_exec(schedule_id)
+        except HTTPException as exc:
+            yield _sse({"type": "error", "text": exc.detail})
+            yield _sse({"type": "done"})
+            return
+        except Exception as exc:
+            yield _sse({"type": "error", "text": str(exc)})
+            yield _sse({"type": "done"})
+            return
 
-    if not command_text:
-        def _empty():
+        if not command_text:
             yield _sse({"type": "error", "text": "No command configured"})
             yield _sse({"type": "done"})
-        return StreamingResponse(_empty(), media_type="text/event-stream")
+            return
 
-    def stream():
         if s_type == "ssh":
             yield from _ssh_stream(s_host, s_port, c_user, c_pass, c_key, command_text)
         elif s_type == "winrm":
             yield from _winrm_stream(s_host, s_port, c_user, c_pass, command_text)
         else:
             yield _sse({"type": "error", "text": f"Unsupported server type: {s_type}"})
-            yield _sse({"type": "done"})
+
+        yield _sse({"type": "done"})
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
