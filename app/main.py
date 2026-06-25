@@ -166,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.95"
+APP_VERSION = "1.6.96"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -2165,16 +2165,36 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     await websocket.accept()
 
     # Phase 1: connect to VNC server (Python DSM for SecureVNCPlugin2 ClientAuth, or plain TCP)
-    try:
-        reader, writer = await asyncio.open_connection(session["host"], session["port"])
-        sock = writer.transport.get_extra_info("socket")
-        if sock:
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        mode = "DSM ClientAuth" if client_key_path else "plain"
+    async def _connect_and_handshake(force_sub_type: int = 0):
+        r, w = await asyncio.open_connection(session["host"], session["port"])
+        sk = w.transport.get_extra_info("socket")
+        if sk:
+            sk.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        mode = f"DSM sub=0x{force_sub_type:02x}" if force_sub_type else (
+            "DSM ClientAuth" if client_key_path else "plain"
+        )
         print(f"[VNC {host_label}] TCP connected ({mode})")
-        enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
-            reader, writer, client_key_path or "", password, host_label,
-            username=username)
+        e, d, pre = await _server_rfb_handshake(
+            r, w, client_key_path or "", password, host_label,
+            username=username, dsm_force_sub_type=force_sub_type)
+        return r, w, e, d, pre
+
+    try:
+        reader, writer, enc_ctx, dec_ctx, srv_pre_buf = await _connect_and_handshake()
+    except _DSMAuthFailure as e:
+        # DSM sub-type 0x72 (ClientAuth) failed — retry with sub-type 0x73 if we have
+        # credentials, since many servers accept both sub-types.
+        print(f"[VNC {host_label}] DSM 0x72 failed ({e}); retrying with sub-type 0x73")
+        try:
+            reader, writer, enc_ctx, dec_ctx, srv_pre_buf = \
+                await _connect_and_handshake(force_sub_type=0x73)
+        except Exception as e2:
+            print(f"[VNC {host_label}] Connection/handshake failed ({type(e2).__name__}): {e2}")
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+            return
     except Exception as e:
         print(f"[VNC {host_label}] Connection/handshake failed ({type(e).__name__}): {e}")
         try:
@@ -2557,7 +2577,21 @@ def _resolve_schedule_exec(schedule_id: int):
         server = db.get(ServerRow, sched.server_id)
         if not server:
             raise HTTPException(404, "Server not found")
+
+        # Credential resolution: schedule override → server default → folder hierarchy
         cred_id = sched.credential_id or server.credential_id
+        if not cred_id and server.server_group:
+            # Walk folder path upward looking for a folder credential
+            parts = server.server_group.split("/")
+            for depth in range(len(parts), 0, -1):
+                folder_path = "/".join(parts[:depth])
+                fc = db.query(FolderCredentialRow).filter(
+                    FolderCredentialRow.folder_path == folder_path
+                ).first()
+                if fc and fc.credential_id:
+                    cred_id = fc.credential_id
+                    break
+
         cred = db.get(CredentialRow, cred_id) if cred_id else None
         command_text = sched.command_text or ""
         if not command_text and sched.command_id:
