@@ -166,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.98"
+APP_VERSION = "1.6.99"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -2586,7 +2586,7 @@ def _resolve_schedule_exec(schedule_id: int):
             for depth in range(len(parts), 0, -1):
                 folder_path = "/".join(parts[:depth])
                 fc = db.query(FolderCredentialRow).filter(
-                    FolderCredentialRow.folder_path == folder_path
+                    FolderCredentialRow.path == folder_path
                 ).first()
                 if fc and fc.credential_id:
                     cred_id = fc.credential_id
