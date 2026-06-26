@@ -166,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.105"
+APP_VERSION = "1.6.106"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1616,29 +1616,36 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 if server_pub is None:
                     raise ValueError(f"DSM 0x73: no valid RSA modulus found at offsets 22-27")
 
-                # Derive RC4 key = SHA1(raw 256-byte server modulus).
-                rc4_key = hashlib.sha1(raw_mod).digest()  # 20 bytes
-                print(f"[VNC {label}] DSM 0x73: rc4_key={rc4_key.hex()} "
+                # Derive RC4 key = SHA1(client public key modulus, big-endian).
+                # The server has the viewer's public key installed; both sides can independently
+                # compute SHA1(client_pub_modulus) — the server uses it to encrypt the AES key,
+                # the client uses it to decrypt.
+                client_pub_nums = private_key.public_key().public_numbers()
+                client_raw_mod_be = client_pub_nums.n.to_bytes(key_size, "big")
+                rc4_key = hashlib.sha1(client_raw_mod_be).digest()  # 20 bytes
+                # Also pre-compute LE variant in case server stores modulus little-endian.
+                client_raw_mod_le = client_raw_mod_be[::-1]
+                rc4_key_le = hashlib.sha1(client_raw_mod_le).digest()
+                print(f"[VNC {label}] DSM 0x73: rc4_key(client_pub_BE)={rc4_key.hex()} "
+                      f"rc4_key(client_pub_LE)={rc4_key_le.hex()} "
                       f"challenge_raw={rc4_chal.hex()}")
 
-                # RC4-decrypt the challenge to recover the AES session key sent by the server.
-                # Protocol: server RC4-encrypts its chosen AES key with key=SHA1(pubkey_bytes)
-                # and puts it in the challenge. Client decrypts → RSA-encrypts back as proof.
+                # RC4-decrypt the challenge — try BE key first, then LE, then password.
                 challenge_dec = _arc4(rc4_key, rc4_chal)
-                print(f"[VNC {label}] DSM 0x73: challenge_dec={challenge_dec.hex()}")
+                print(f"[VNC {label}] DSM 0x73: challenge_dec(BE)={challenge_dec.hex()}")
 
                 # AES-128 session key = first 16 bytes of decrypted challenge.
                 aes_key_73 = challenge_dec[:16]
                 aes_iv_73 = bytes(16)  # IV = all zeros
 
-                # RSA-encrypt the AES key with the server's public key (PKCS#1 v1.5, BE).
+                # RSA-encrypt the AES key with the server's public key (PKCS#1 v1.5).
                 enc_aes_73 = server_pub.encrypt(aes_key_73, asym_padding.PKCS1v15())
 
-                # Send: RSA-encrypted AES key + 3 null bytes (from binary analysis).
-                writer.write(enc_aes_73 + b"\x00\x00\x00")
+                # Send: RSA-encrypted AES key (256 bytes).
+                writer.write(enc_aes_73)
                 await writer.drain()
-                print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B RSA-encrypted AES key "
-                      f"+ 3 null bytes; aes_key={aes_key_73.hex()} iv=zeros")
+                print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B RSA-encrypted AES key; "
+                      f"aes_key={aes_key_73.hex()} iv=zeros")
 
                 # Set up AES-128-OFB cipher contexts.
                 enc_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).encryptor()
