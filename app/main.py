@@ -166,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.108"
+APP_VERSION = "1.6.109"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1266,6 +1266,9 @@ def _vnc_des_response(password: str, challenge: bytes) -> bytes:
 
 class _DSMAuthFailure(Exception):
     """Raised when the VNC server returns SecurityResult != 0 for DSM type-17."""
+    def __init__(self, msg, server_pub_der: bytes = b""):
+        super().__init__(msg)
+        self.server_pub_der = server_pub_der  # 270-byte DER RSAPublicKey from 0x73 handshake
 
 
 def _arc4(key: bytes, data: bytes, drop: int = 0) -> bytes:
@@ -1340,18 +1343,22 @@ def _parse_rsapubkey_ber(data: bytes):
 
 
 async def _launch_securevnc_helper(host: str, port: int, label: str,
-                                    client_key_path: str = ""):
+                                    client_key_path: str = "",
+                                    server_pub_der: bytes = b""):
     """
     Launch ultravnc_dsm_helper in 'securevnc' mode as a local TCP proxy.
-    The helper connects to host:port, performs the RSA/AES key exchange
-    natively, and presents a plain (unencrypted) VNC stream on a local port.
-    Returns (reader, writer, proc, keystore_symlink) — caller must
-    proc.terminate() and optionally os.unlink(keystore_symlink) on cleanup.
 
-    client_key_path: path to the ViewerClientAuth.pkey DER-encoded RSA private
-    key.  The helper requires the keyfile name to END in 'ClientAuth.pkey' to
-    trigger client authentication mode, so we create a per-session symlink with
-    that suffix.
+    When server_pub_der (270-byte DER RSAPublicKey from 0x73 handshake) is
+    provided, we use the 'ClientAuth.pkey.rsa' mode so the helper can verify
+    the server key AND do client authentication without needing a GUI dialog:
+      keyfile = <base>_ClientAuth.pkey.rsa  (270B server DER public key)
+      <base>_ClientAuth.pkey                (client DER private key, separate file)
+
+    Without server_pub_der we fall back to 'ClientAuth.pkey' mode (client auth
+    only, server key accepted with MITM warning — no Tk dialog needed).
+
+    Returns (reader, writer, proc, [temp_file_paths]) — caller must terminate
+    proc and unlink the temp files.
     """
     # Bind an ephemeral port to discover a free number, then release it.
     with socket.socket() as s:
@@ -1359,28 +1366,52 @@ async def _launch_securevnc_helper(host: str, port: int, label: str,
         local_port = s.getsockname()[1]
 
     safe_host = host.replace(":", "_")
+    base = f"/tmp/svnc_{safe_host}_{port}_{local_port}"
+    temp_files = []
 
-    # The helper uses the keyfile name suffix to determine auth mode:
-    #   ends in 'ClientAuth.pkey'     → RSA client key authentication
-    #   ends in 'ClientAuth.pkey.rsa' → client auth + server RSA keystore
-    # We symlink the stored key to a temp path ending in 'ClientAuth.pkey'.
-    keystore_symlink = f"/tmp/svnc_{safe_host}_{port}_{local_port}_ClientAuth.pkey"
-    try:
-        os.unlink(keystore_symlink)
-    except FileNotFoundError:
-        pass
-    if client_key_path and os.path.exists(client_key_path):
-        os.symlink(client_key_path, keystore_symlink)
-        keystore = keystore_symlink
-        print(f"[VNC {label}] DSM ClientAuth key: {client_key_path} → {keystore_symlink}")
+    if client_key_path and os.path.exists(client_key_path) and server_pub_der:
+        # Best mode: provide BOTH server keystore and client private key.
+        # keyfile.rsa = server 270B DER public key; keyfile = client DER private key.
+        rsa_path = f"{base}_ClientAuth.pkey.rsa"
+        client_path = f"{base}_ClientAuth.pkey"
+        try:
+            with open(rsa_path, "wb") as f:
+                f.write(server_pub_der)
+            with open(client_path, "wb") as f:
+                f.write(open(client_key_path, "rb").read())
+            temp_files = [rsa_path, client_path]
+            keystore = rsa_path
+            print(f"[VNC {label}] DSM helper: server_pub_der({len(server_pub_der)}B) → "
+                  f"{rsa_path}; client key → {client_path}")
+        except Exception as e:
+            print(f"[VNC {label}] DSM helper: failed to write keystore files: {e}")
+            for p in [rsa_path, client_path]:
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+            temp_files = []
+            keystore = f"{base}_ClientAuth.pkey"
+    elif client_key_path and os.path.exists(client_key_path):
+        # Client auth only — server key accepted without verification (MITM warning).
+        # The helper's 'ClientAuth.pkey' mode skips server keystore check
+        # so no Tk dialog is shown.
+        client_path = f"{base}_ClientAuth.pkey"
+        try:
+            with open(client_path, "wb") as f:
+                f.write(open(client_key_path, "rb").read())
+            temp_files = [client_path]
+            keystore = client_path
+            print(f"[VNC {label}] DSM helper: client key → {client_path} (no server keystore)")
+        except Exception as e:
+            print(f"[VNC {label}] DSM helper: failed to write client key: {e}")
+            temp_files = []
+            keystore = f"{base}_ClientAuth.pkey"
     else:
-        # No client key — run without a keystore; helper falls back to WARNING
-        keystore = keystore_symlink  # non-existent path → no keystore
-        print(f"[VNC {label}] DSM no client key — helper will warn and continue")
+        keystore = f"{base}_ClientAuth.pkey"
+        print(f"[VNC {label}] DSM helper: no keys — running without keystore")
 
-    # Strip DISPLAY/XAUTHORITY so that 'wish' (Tcl/Tk, installed with ssvnc)
-    # fails immediately with "no display name" rather than blocking while
-    # trying to connect to an unreachable X11 socket.
+    # Strip DISPLAY/XAUTHORITY so 'wish' (Tcl/Tk) fails fast instead of blocking.
     env = {k: v for k, v in os.environ.items()
            if k not in ("DISPLAY", "XAUTHORITY")}
     env["ULTRAVNC_DSM_HELPER_NOIPV6"] = "1"
@@ -1390,24 +1421,37 @@ async def _launch_securevnc_helper(host: str, port: int, label: str,
         "securevnc", keystore, str(local_port), f"{host}:{port}",
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,  # merge stdout+stderr for unified capture
         env=env,
     )
+
+    # Background task: continuously read and log ALL helper output.
+    _helper_output_lines: list = []
+
+    async def _drain_helper_output():
+        try:
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                txt = line.decode(errors="replace").rstrip()
+                _helper_output_lines.append(txt)
+                print(f"[VNC {label}] DSM helper: {txt}")
+        except Exception:
+            pass
+
+    _output_task = asyncio.ensure_future(_drain_helper_output())
 
     # Retry connecting until the helper has bound the port (up to ~4 s).
     reader = writer = None
     for delay in (0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.2):
         await asyncio.sleep(delay)
         if proc.returncode is not None:
-            out_b, err_b = b"", b""
-            try:
-                out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=2.0)
-            except Exception:
-                pass
+            await asyncio.sleep(0.3)
+            _output_task.cancel()
             raise RuntimeError(
                 f"DSM helper exited early (rc={proc.returncode}) "
-                f"stdout={out_b.decode(errors='replace')!r} "
-                f"stderr={err_b.decode(errors='replace')!r}"
+                f"output={_helper_output_lines!r}"
             )
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", local_port)
@@ -1416,32 +1460,11 @@ async def _launch_securevnc_helper(host: str, port: int, label: str,
             pass
     if writer is None:
         proc.terminate()
+        _output_task.cancel()
         raise RuntimeError(f"DSM helper never bound :{local_port}")
 
-    # Brief pause to let the helper complete its remote DSM exchange, then
-    # drain any stderr it has printed (diagnostic).
-    for _ in range(5):
-        await asyncio.sleep(0.5)
-        try:
-            err_chunk = await asyncio.wait_for(proc.stderr.read(4096), timeout=0.05)
-            if err_chunk:
-                print(f"[VNC {label}] DSM helper: {err_chunk.decode(errors='replace')!r}")
-        except (asyncio.TimeoutError, Exception):
-            pass
-        if proc.returncode is not None:
-            out_b, err_b = b"", b""
-            try:
-                out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=2.0)
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"DSM helper exited (rc={proc.returncode}) "
-                f"stdout={out_b.decode(errors='replace')!r} "
-                f"stderr={err_b.decode(errors='replace')!r}"
-            )
-
     print(f"[VNC {label}] DSM helper ready :{local_port} → {host}:{port}")
-    return reader, writer, proc, keystore_symlink
+    return reader, writer, proc, temp_files, _output_task
 
 
 async def _server_rfb_handshake(reader, writer, client_key_path: str,
@@ -1665,24 +1688,26 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 # RSA-encrypt the AES key with the server's public key (PKCS#1 v1.5).
                 enc_aes_73 = server_pub.encrypt(aes_key_73, asym_padding.PKCS1v15())
 
-                # RSA-sign the AES key with the client's private key (PKCS#1 v1.5 + SHA-1).
-                # The server verifies this with the client's installed public key.
+                # RSA-sign the RAW CHALLENGE (rc4_chal) with the client's private key.
+                # The server verifies this signature using the stored client public key.
+                # Signing the challenge blob (not the decrypted AES key) matches what
+                # ultravnc_dsm_helper does: RSA_sign(client_priv, SHA1, challenge_bytes).
                 # SECUREVNC_SIGNATURE_SIZE=256.
                 from cryptography.hazmat.primitives import hashes as _hashes
-                sig_73 = private_key.sign(aes_key_73, asym_padding.PKCS1v15(), _hashes.SHA1())
+                sig_73 = private_key.sign(rc4_chal, asym_padding.PKCS1v15(), _hashes.SHA1())
 
                 # Send: 256B RSA-encrypted AES key + 256B client signature = 512B total.
                 writer.write(enc_aes_73 + sig_73)
                 await writer.drain()
                 print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B enc_key + "
-                      f"{len(sig_73)}B sig (total={len(enc_aes_73)+len(sig_73)}B); "
+                      f"{len(sig_73)}B sig(challenge) (total={len(enc_aes_73)+len(sig_73)}B); "
                       f"aes_key={aes_key_73.hex()} rc4_key={rc4_key.hex()}")
 
                 # Set up AES-128-OFB cipher contexts.
                 enc_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).encryptor()
                 dec_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).decryptor()
 
-                # Read SecurityResult (4 bytes) — plain RFB or AES-OFB encrypted.
+                # Read SecurityResult (4 bytes) — plain or AES-OFB encrypted.
                 raw_sr73 = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
                 dec_sr73 = dec_ctx.update(raw_sr73)
                 sr73_plain = int.from_bytes(raw_sr73, "big")
@@ -1694,7 +1719,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                     print(f"[VNC {label}] DSM 0x73: Auth OK! (SR=0 via {ok_via})")
                     return enc_ctx, dec_ctx, b""
                 raise _DSMAuthFailure(
-                    f"DSM 0x73: SR plain={sr73_plain} aes_dec={sr73_dec} — auth rejected"
+                    f"DSM 0x73: SR plain={sr73_plain} aes_dec={sr73_dec} — auth rejected",
+                    server_pub_der=der_server_pub,
                 )
 
             if len(after_sub) >= key_size:
@@ -1984,9 +2010,26 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         print(f"[VNC {label}] DSM Path B: wire_cipher first8={wire_cipher[:8].hex()} "
               f"last8={wire_cipher[-8:].hex()} "
               f"({'LE/reversed' if dsm_reverse_cipher else 'BE/as-is'})")
+
+        # In 0x72 mode the server also expects a client signature of the challenge/key.
+        # The 60B leftover = [4B flags][56B RC4-challenge]; after sending enc_key we must
+        # also send a 256B RSA signature so the server can verify client identity.
+        # Sign the raw challenge portion (leftover[4:]) if present, else sign the AES key.
+        _pathb_sign_data = (dsm_leftover_enc[4:] if len(dsm_leftover_enc) >= 5
+                            else path_b_aes_key)
+        try:
+            from cryptography.hazmat.primitives import hashes as _hb
+            _pathb_sig = (private_key.sign(_pathb_sign_data, asym_padding.PKCS1v15(), _hb.SHA1())
+                          if private_key is not None else None)
+        except Exception:
+            _pathb_sig = None
+
         writer.write(wire_cipher)
+        if _pathb_sig is not None:
+            writer.write(_pathb_sig)
         await writer.drain()
-        print(f"[VNC {label}] DSM Path B: sent {len(wire_cipher)}B encrypted session key "
+        print(f"[VNC {label}] DSM Path B: sent {len(wire_cipher)}B encrypted session key"
+              f"{f' + {len(_pathb_sig)}B sig' if _pathb_sig else ''} "
               f"(e={dsm_exponent}, mod={'LE' if actual_rev_mod else 'BE'}, "
               f"cipher={'LE' if dsm_reverse_cipher else 'BE'}, "
               f"rsa={'raw' if dsm_raw_rsa else 'PKCS1v15'}), "
@@ -2204,7 +2247,8 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     _HELPER_BIN = "/usr/lib/ssvnc/ultravnc_dsm_helper"
     helper_proc = None
-    helper_ks = None
+    helper_temp_files: list = []
+    helper_output_task = None
 
     # Phase 1: connect to VNC server (Python DSM for SecureVNCPlugin2 ClientAuth, or plain TCP)
     async def _connect_and_handshake(force_sub_type: int = 0):
@@ -2222,40 +2266,49 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
         return r, w, e, d, pre
 
     async def _cleanup_helper():
+        if helper_output_task:
+            helper_output_task.cancel()
         if helper_proc:
             try:
                 helper_proc.terminate()
                 await asyncio.wait_for(helper_proc.wait(), timeout=2.0)
             except Exception:
                 pass
-        if helper_ks:
+        for p in helper_temp_files:
             try:
-                os.unlink(helper_ks)
+                os.unlink(p)
             except Exception:
                 pass
 
     try:
         reader, writer, enc_ctx, dec_ctx, srv_pre_buf = await _connect_and_handshake()
     except _DSMAuthFailure as e:
-        # Python DSM sub-type 0x72 failed — retry with 0x73.
+        # Python DSM sub-type 0x72 failed — retry with 0x73 to also get server pub DER.
         print(f"[VNC {host_label}] DSM 0x72 failed ({e}); retrying with sub-type 0x73")
+        server_pub_der_from_73 = b""
         try:
             reader, writer, enc_ctx, dec_ctx, srv_pre_buf = \
                 await _connect_and_handshake(force_sub_type=0x73)
-        except Exception as e2:
+        except _DSMAuthFailure as e2:
+            server_pub_der_from_73 = e2.server_pub_der or b""
             # Both Python DSM modes exhausted. Fall back to the native
-            # ultravnc_dsm_helper binary which handles the full SecureVNCPlugin2
-            # RSA key exchange natively and presents a plain RFB stream locally.
+            # ultravnc_dsm_helper binary.  Provide server DER from 0x73 so the
+            # helper can use ClientAuth.pkey.rsa mode (proper server keystore).
             if client_key_path and os.path.exists(_HELPER_BIN):
                 print(f"[VNC {host_label}] Python DSM exhausted "
-                      f"({type(e2).__name__}: {e2}); falling back to native helper")
+                      f"({type(e2).__name__}: {e2}); falling back to native helper"
+                      f" (server_pub_der={len(server_pub_der_from_73)}B)")
                 try:
-                    h_r, h_w, helper_proc, helper_ks = await _launch_securevnc_helper(
-                        session["host"], session["port"], host_label, client_key_path)
+                    h_r, h_w, helper_proc, helper_temp_files, helper_output_task = \
+                        await _launch_securevnc_helper(
+                            session["host"], session["port"], host_label,
+                            client_key_path, server_pub_der=server_pub_der_from_73)
                     enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
                         h_r, h_w, "", password, host_label, username=username)
                     reader, writer = h_r, h_w
                 except Exception as he:
+                    # Give the helper 1s to flush any remaining output before cleanup.
+                    await asyncio.sleep(1.0)
                     print(f"[VNC {host_label}] Helper also failed: {type(he).__name__}: {he}")
                     await _cleanup_helper()
                     try:
@@ -2271,6 +2324,13 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
                 except Exception:
                     pass
                 return
+        except Exception as e2:
+            print(f"[VNC {host_label}] Connection/handshake failed ({type(e2).__name__}): {e2}")
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+            return
     except Exception as e:
         print(f"[VNC {host_label}] Connection/handshake failed ({type(e).__name__}): {e}")
         try:
