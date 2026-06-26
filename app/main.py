@@ -166,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.106"
+APP_VERSION = "1.6.107"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1268,8 +1268,12 @@ class _DSMAuthFailure(Exception):
     """Raised when the VNC server returns SecurityResult != 0 for DSM type-17."""
 
 
-def _arc4(key: bytes, data: bytes) -> bytes:
-    """RC4 stream cipher (encrypt == decrypt)."""
+def _arc4(key: bytes, data: bytes, drop: int = 0) -> bytes:
+    """RC4 stream cipher (encrypt == decrypt).
+
+    drop: number of initial keystream bytes to discard before processing data.
+    UltraVNC SecureVNCPlugin uses drop=3072 (SECUREVNC_RC4_DROP_BYTES).
+    """
     S = list(range(256))
     j = 0
     for i in range(256):
@@ -1277,6 +1281,11 @@ def _arc4(key: bytes, data: bytes) -> bytes:
         S[i], S[j] = S[j], S[i]
     out = []
     i = j = 0
+    # Discard the first `drop` bytes of keystream.
+    for _ in range(drop):
+        i = (i + 1) & 0xff
+        j = (j + S[i]) & 0xff
+        S[i], S[j] = S[j], S[i]
     for b in data:
         i = (i + 1) & 0xff
         j = (j + S[i]) & 0xff
@@ -1616,23 +1625,38 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 if server_pub is None:
                     raise ValueError(f"DSM 0x73: no valid RSA modulus found at offsets 22-27")
 
-                # Derive RC4 key = SHA1(client public key modulus, big-endian).
-                # The server has the viewer's public key installed; both sides can independently
-                # compute SHA1(client_pub_modulus) — the server uses it to encrypt the AES key,
-                # the client uses it to decrypt.
+                # Reconstruct the 270-byte DER-encoded RSAPublicKey from the raw modulus.
+                # SECUREVNC_RSA_PUBKEY_SIZE=270; RC4 key = EVP_BytesToKey(rc4,sha1,no_salt,DER,270,1)
+                # which for RC4-128 (key_len=16) = SHA1(DER_270B)[:16].
+                # The server has its own DER key and computes the same hash; both sides agree.
+                der_server_pub = (
+                    b"\x30\x82\x01\x0a"      # SEQUENCE, 266 bytes
+                    + b"\x02\x82\x01\x01\x00" # INTEGER, 257 bytes (with leading 0x00)
+                    + raw_mod                  # 256-byte modulus
+                    + b"\x02\x03\x01\x00\x01" # INTEGER 65537
+                )  # = 270 bytes total
+                rc4_key_server_der = hashlib.sha1(der_server_pub).digest()[:16]
+
+                # Also compute client-pub-DER and raw variants for diagnostic logging.
                 client_pub_nums = private_key.public_key().public_numbers()
                 client_raw_mod_be = client_pub_nums.n.to_bytes(key_size, "big")
-                rc4_key = hashlib.sha1(client_raw_mod_be).digest()  # 20 bytes
-                # Also pre-compute LE variant in case server stores modulus little-endian.
-                client_raw_mod_le = client_raw_mod_be[::-1]
-                rc4_key_le = hashlib.sha1(client_raw_mod_le).digest()
-                print(f"[VNC {label}] DSM 0x73: rc4_key(client_pub_BE)={rc4_key.hex()} "
-                      f"rc4_key(client_pub_LE)={rc4_key_le.hex()} "
-                      f"challenge_raw={rc4_chal.hex()}")
+                der_client_pub = (
+                    b"\x30\x82\x01\x0a" + b"\x02\x82\x01\x01\x00"
+                    + client_raw_mod_be + b"\x02\x03\x01\x00\x01"
+                )
+                rc4_key_client_der = hashlib.sha1(der_client_pub).digest()[:16]
+                rc4_key_server_raw = hashlib.sha1(raw_mod).digest()[:16]
 
-                # RC4-decrypt the challenge — try BE key first, then LE, then password.
-                challenge_dec = _arc4(rc4_key, rc4_chal)
-                print(f"[VNC {label}] DSM 0x73: challenge_dec(BE)={challenge_dec.hex()}")
+                print(f"[VNC {label}] DSM 0x73: rc4_key(server_DER)={rc4_key_server_der.hex()} "
+                      f"rc4_key(client_DER)={rc4_key_client_der.hex()} "
+                      f"rc4_key(server_raw)={rc4_key_server_raw.hex()} "
+                      f"challenge_raw({len(rc4_chal)}B)={rc4_chal.hex()}")
+
+                # UltraVNC SecureVNCPlugin uses SECUREVNC_RC4_DROP_BYTES=3072:
+                # discard the first 3072 bytes of the RC4 keystream before decrypting.
+                rc4_key = rc4_key_server_der
+                challenge_dec = _arc4(rc4_key, rc4_chal, drop=3072)
+                print(f"[VNC {label}] DSM 0x73: challenge_dec(server_DER,drop=3072)={challenge_dec.hex()}")
 
                 # AES-128 session key = first 16 bytes of decrypted challenge.
                 aes_key_73 = challenge_dec[:16]
@@ -1641,11 +1665,18 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 # RSA-encrypt the AES key with the server's public key (PKCS#1 v1.5).
                 enc_aes_73 = server_pub.encrypt(aes_key_73, asym_padding.PKCS1v15())
 
-                # Send: RSA-encrypted AES key (256 bytes).
-                writer.write(enc_aes_73)
+                # RSA-sign the AES key with the client's private key (PKCS#1 v1.5 + SHA-1).
+                # The server verifies this with the client's installed public key.
+                # SECUREVNC_SIGNATURE_SIZE=256.
+                from cryptography.hazmat.primitives import hashes as _hashes
+                sig_73 = private_key.sign(aes_key_73, asym_padding.PKCS1v15(), _hashes.SHA1())
+
+                # Send: 256B RSA-encrypted AES key + 256B client signature = 512B total.
+                writer.write(enc_aes_73 + sig_73)
                 await writer.drain()
-                print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B RSA-encrypted AES key; "
-                      f"aes_key={aes_key_73.hex()} iv=zeros")
+                print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B enc_key + "
+                      f"{len(sig_73)}B sig (total={len(enc_aes_73)+len(sig_73)}B); "
+                      f"aes_key={aes_key_73.hex()} rc4_key={rc4_key.hex()}")
 
                 # Set up AES-128-OFB cipher contexts.
                 enc_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).encryptor()
