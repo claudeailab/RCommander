@@ -166,7 +166,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.107"
+APP_VERSION = "1.6.108"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -2202,6 +2202,10 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
 
     await websocket.accept()
 
+    _HELPER_BIN = "/usr/lib/ssvnc/ultravnc_dsm_helper"
+    helper_proc = None
+    helper_ks = None
+
     # Phase 1: connect to VNC server (Python DSM for SecureVNCPlugin2 ClientAuth, or plain TCP)
     async def _connect_and_handshake(force_sub_type: int = 0):
         r, w = await asyncio.open_connection(session["host"], session["port"])
@@ -2217,22 +2221,56 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
             username=username, dsm_force_sub_type=force_sub_type)
         return r, w, e, d, pre
 
+    async def _cleanup_helper():
+        if helper_proc:
+            try:
+                helper_proc.terminate()
+                await asyncio.wait_for(helper_proc.wait(), timeout=2.0)
+            except Exception:
+                pass
+        if helper_ks:
+            try:
+                os.unlink(helper_ks)
+            except Exception:
+                pass
+
     try:
         reader, writer, enc_ctx, dec_ctx, srv_pre_buf = await _connect_and_handshake()
     except _DSMAuthFailure as e:
-        # DSM sub-type 0x72 (ClientAuth) failed — retry with sub-type 0x73 if we have
-        # credentials, since many servers accept both sub-types.
+        # Python DSM sub-type 0x72 failed — retry with 0x73.
         print(f"[VNC {host_label}] DSM 0x72 failed ({e}); retrying with sub-type 0x73")
         try:
             reader, writer, enc_ctx, dec_ctx, srv_pre_buf = \
                 await _connect_and_handshake(force_sub_type=0x73)
         except Exception as e2:
-            print(f"[VNC {host_label}] Connection/handshake failed ({type(e2).__name__}): {e2}")
-            try:
-                await websocket.close()
-            except Exception:
-                pass
-            return
+            # Both Python DSM modes exhausted. Fall back to the native
+            # ultravnc_dsm_helper binary which handles the full SecureVNCPlugin2
+            # RSA key exchange natively and presents a plain RFB stream locally.
+            if client_key_path and os.path.exists(_HELPER_BIN):
+                print(f"[VNC {host_label}] Python DSM exhausted "
+                      f"({type(e2).__name__}: {e2}); falling back to native helper")
+                try:
+                    h_r, h_w, helper_proc, helper_ks = await _launch_securevnc_helper(
+                        session["host"], session["port"], host_label, client_key_path)
+                    enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
+                        h_r, h_w, "", password, host_label, username=username)
+                    reader, writer = h_r, h_w
+                except Exception as he:
+                    print(f"[VNC {host_label}] Helper also failed: {type(he).__name__}: {he}")
+                    await _cleanup_helper()
+                    try:
+                        await websocket.close()
+                    except Exception:
+                        pass
+                    return
+            else:
+                print(f"[VNC {host_label}] Connection/handshake failed "
+                      f"({type(e2).__name__}): {e2}")
+                try:
+                    await websocket.close()
+                except Exception:
+                    pass
+                return
     except Exception as e:
         print(f"[VNC {host_label}] Connection/handshake failed ({type(e).__name__}): {e}")
         try:
@@ -2247,6 +2285,7 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     except Exception as e:
         print(f"[VNC {host_label}] Client handshake failed: {e}")
         writer.close()
+        await _cleanup_helper()
         try:
             await websocket.close()
         except Exception:
@@ -2300,6 +2339,7 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
     for t in tasks:
         t.cancel()
     writer.close()
+    await _cleanup_helper()
     print(f"[VNC {host_label}] proxy closed")
     try:
         await websocket.close()
