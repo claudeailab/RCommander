@@ -170,7 +170,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.113"
+APP_VERSION = "1.6.114"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1785,11 +1785,14 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                       f"rc4_key(server_raw)={rc4_key_server_raw.hex()} "
                       f"challenge_raw({len(rc4_chal)}B)={rc4_chal.hex()}")
 
-                # UltraVNC SecureVNCPlugin uses SECUREVNC_RC4_DROP_BYTES=3072:
-                # discard the first 3072 bytes of the RC4 keystream before decrypting.
-                rc4_key = rc4_key_server_der
-                challenge_dec = _arc4(rc4_key, rc4_chal, drop=3072)
-                print(f"[VNC {label}] DSM 0x73: challenge_dec(server_DER,drop=3072)={challenge_dec.hex()}")
+                # Server RC4-encrypts the challenge nonce with SHA1(stored_viewer_pubkey_DER)[:16].
+                # Both sides agree because the viewer's public key is stored on the server
+                # and held locally.  Use client_DER hash so we decode the same nonce the server
+                # will verify against.  Also log the server_DER variant for diagnostics.
+                challenge_dec_server = _arc4(rc4_key_server_der, rc4_chal, drop=3072)
+                challenge_dec = _arc4(rc4_key_client_der, rc4_chal, drop=3072)
+                print(f"[VNC {label}] DSM 0x73: challenge_dec(client_DER,drop=3072)={challenge_dec.hex()}")
+                print(f"[VNC {label}] DSM 0x73: challenge_dec(server_DER,drop=3072)={challenge_dec_server.hex()} [for diag]")
 
                 # Viewer generates a fresh random AES-128 session key.
                 # UltraVNC SecureVNCPlugin2 0x73: viewer chooses the key, encrypts
@@ -1888,60 +1891,66 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         # SecureVNCPlugin2 ClientAuth (0x72):
         #   Server RSA-raw-encrypts its generated AES key with the viewer's
         #   stored public key → viewer raw-RSA-decrypts to recover AES key.
-        #   Leftover = [4B flags][56B RC4-challenge viewer must sign].
-        #   Viewer sends 256B PKCS1v15-SHA1 signature; server replies with
-        #   4B SR (AES-OFB encrypted, IV=zeros).
+        #   No viewer→server message is needed after the key delivery — the RSA
+        #   decryption itself proves viewer identity.  The 60B leftover is the
+        #   start of the AES-OFB encrypted RFB stream (SecurityResult + optional
+        #   MS-Logon DH challenge).
         if chosen == 0x72 and private_key is not None:
             try:
                 _pn72 = private_key.private_numbers()
                 _c72 = int.from_bytes(encrypted_key, "big")
                 _m72 = pow(_c72, _pn72.d, _pn72.public_numbers.n)
                 _raw72 = _m72.to_bytes(key_size, "big")
-                aes_key_72 = _raw72[-16:]  # AES-128 key in last 16 bytes
+                aes_key_72 = _raw72[-16:]  # AES-128 key — last 16B of raw RSA plaintext
 
-                # Leftover structure: [4B flags][56B RC4-encrypted challenge nonce]
-                # RC4 key = SHA1(client's 270B DER pubkey)[:16], drop=3072 bytes.
-                # Server encrypts a random nonce with RC4; viewer must decrypt it
-                # and sign the plaintext nonce with its RSA private key.
-                _chal_enc_72 = dsm_leftover_enc[4:] if len(dsm_leftover_enc) > 4 else dsm_leftover_enc
-                _cpub_n72 = private_key.public_key().public_numbers().n
-                _cmod72 = _cpub_n72.to_bytes(key_size, "big")
-                _cder72 = (
-                    b"\x30\x82\x01\x0a" + b"\x02\x82\x01\x01\x00"
-                    + _cmod72 + b"\x02\x03\x01\x00\x01"
-                )  # 270B DER RSAPublicKey
-                _rc4k72 = hashlib.sha1(_cder72).digest()[:16]
-                _chal_dec_72 = _arc4(_rc4k72, _chal_enc_72, drop=3072)
-
-                from cryptography.hazmat.primitives import hashes as _h72
-                _sig_72 = private_key.sign(_chal_dec_72, asym_padding.PKCS1v15(), _h72.SHA1())
-                writer.write(_sig_72)
-                await writer.drain()
-                print(f"[VNC {label}] DSM 0x72: aes_key={aes_key_72.hex()} "
-                      f"rc4_key={_rc4k72.hex()} chal_enc={_chal_enc_72.hex()} "
-                      f"chal_dec={_chal_dec_72.hex()} sent {len(_sig_72)}B sig")
-
-                _raw_sr72 = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
+                # Set up AES-OFB (key, IV=all-zeros) — no viewer reply needed.
                 _enc72 = Cipher(algorithms.AES(aes_key_72), _OFB(bytes(16))).encryptor()
                 _dec72 = Cipher(algorithms.AES(aes_key_72), _OFB(bytes(16))).decryptor()
-                _dec_sr72 = int.from_bytes(_dec72.update(_raw_sr72), "big")
-                _plain_sr72 = int.from_bytes(_raw_sr72, "big")
-                print(f"[VNC {label}] DSM 0x72: SR raw={_raw_sr72.hex()} "
-                      f"aes_dec={_dec_sr72} plain={_plain_sr72}")
 
-                if _dec_sr72 == 0 or _plain_sr72 == 0:
-                    _aes72_active = (_dec_sr72 == 0 and _plain_sr72 != 0)
-                    print(f"[VNC {label}] DSM 0x72: Auth OK! "
-                          f"({'AES-decrypted' if _aes72_active else 'plain'} SR=0)")
-                    if not _aes72_active:
-                        _enc72 = _dec72 = None
+                # Decrypt the leftover: it's the start of the AES-encrypted RFB stream.
+                _dec_left72 = _dec72.update(dsm_leftover_enc) if dsm_leftover_enc else b""
+                _sr72_val = int.from_bytes(_dec_left72[:4], "big") if len(_dec_left72) >= 4 else -1
+                print(f"[VNC {label}] DSM 0x72: aes_key(last16)={aes_key_72.hex()} "
+                      f"raw72[:16]={_raw72[:16].hex()} raw72[112:128]={_raw72[112:128].hex()} "
+                      f"dec_leftover_sr=0x{_sr72_val:08x} "
+                      f"dec_leftover[:8]={_dec_left72[:8].hex()}")
+                print(f"[VNC {label}] DSM 0x72: full raw72={_raw72.hex()}")
+
+                if _sr72_val == 0:
+                    print(f"[VNC {label}] DSM 0x72: Auth OK (SR=0 in decrypted leftover)")
                     if username:
                         await _mslogon_exchange(reader, writer, label, username, password,
-                                                _dec72 if _aes72_active else None,
-                                                _enc72 if _aes72_active else None)
+                                                _dec72, _enc72)
                     return _enc72, _dec72, b""
+
+                # SR not 0 — either the AES key position is different or leftover ≠ SR.
+                # Try other positions in the 256B raw RSA result, then fall through.
+                _found_key72 = None
+                for _off72 in range(0, key_size - 15):
+                    if _off72 == key_size - 16:
+                        continue  # already tried last16 above
+                    _kk = _raw72[_off72:_off72 + 16]
+                    try:
+                        _pd = Cipher(algorithms.AES(_kk), _OFB(bytes(16))).decryptor()
+                        _ds = int.from_bytes(_pd.update(dsm_leftover_enc[:4]), "big") if dsm_leftover_enc else -1
+                        if _ds == 0:
+                            print(f"[VNC {label}] DSM 0x72: AES key found at raw72[{_off72}:{_off72+16}]={_kk.hex()}")
+                            _found_key72 = _kk
+                            break
+                    except Exception:
+                        pass
+                if _found_key72:
+                    _enc72 = Cipher(algorithms.AES(_found_key72), _OFB(bytes(16))).encryptor()
+                    _dec72 = Cipher(algorithms.AES(_found_key72), _OFB(bytes(16))).decryptor()
+                    _dec_left72 = _dec72.update(dsm_leftover_enc) if dsm_leftover_enc else b""
+                    print(f"[VNC {label}] DSM 0x72: Auth OK (SR=0 at offset scan)")
+                    if username:
+                        await _mslogon_exchange(reader, writer, label, username, password,
+                                                _dec72, _enc72)
+                    return _enc72, _dec72, b""
+
                 raise _DSMAuthFailure(
-                    f"DSM 0x72: SR aes={_dec_sr72} plain={_plain_sr72} — auth rejected"
+                    f"DSM 0x72: SR=0x{_sr72_val:08x} in decrypted leftover — key mismatch"
                 )
             except _DSMAuthFailure:
                 raise
@@ -1986,7 +1995,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                         raw_candidates.append((f"{pad_name}-md5", hashlib.md5(plaintext).digest()))
                 except Exception as e:
                     print(f"[VNC {label}] DSM {ord_pfx}{type(pad).__name__} failed: {e}")
-            # Raw RSA decryption (no padding) — try last-16 and first-16 of m=c^d mod n
+            # Raw RSA decryption (no padding) — full sliding-window scan of m=c^d mod n
             try:
                 c_int = int.from_bytes(enc_bytes, "big")
                 m_int = pow(c_int, priv_nums.d, priv_nums.public_numbers.n)
@@ -1994,6 +2003,13 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 print(f"[VNC {label}] DSM {ord_pfx}RAW → last16={raw_dec[-16:].hex()} first16={raw_dec[:16].hex()}")
                 raw_candidates.append((f"{ord_pfx}RAW-last16", raw_dec[-16:]))
                 raw_candidates.append((f"{ord_pfx}RAW-first16", raw_dec[:16]))
+                # Full sliding window: every 16B window of the 256B raw RSA result
+                for _roff in range(1, key_size - 16):
+                    raw_candidates.append((f"{ord_pfx}RAW-s{_roff:03d}", raw_dec[_roff:_roff + 16]))
+                # Hash-derived from full plaintext
+                raw_candidates.append((f"{ord_pfx}RAW-md5", hashlib.md5(raw_dec).digest()))
+                raw_candidates.append((f"{ord_pfx}RAW-sha1", hashlib.sha1(raw_dec).digest()[:16]))
+                raw_candidates.append((f"{ord_pfx}RAW-sha256", hashlib.sha256(raw_dec).digest()[:16]))
             except Exception as e:
                 print(f"[VNC {label}] DSM {ord_pfx}RAW failed: {e}")
 
@@ -2030,7 +2046,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                           _dsm_hdr16 != _iv_prefix and
                           len(dsm_leftover_enc) >= 4)
 
-        _silent_prefixes = ("PKCS1v15-s", "REV-PKCS1v15-s")  # suppress per-slice log spam
+        _silent_prefixes = ("PKCS1v15-s", "REV-PKCS1v15-s", "RAW-s", "REV-RAW-s")  # suppress per-slice log spam
 
         for key_desc, key_bytes in raw_candidates:
             _silent = any(key_desc.startswith(p) for p in _silent_prefixes)
