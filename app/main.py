@@ -170,7 +170,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.112"
+APP_VERSION = "1.6.113"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1804,13 +1804,14 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 _c73 = pow(_m73, _spub_e, _spub_n)
                 enc_aes_73 = _c73.to_bytes(key_size, "big")
 
-                # RSA-sign the RAW CHALLENGE (rc4_chal) with the client's private key.
+                # RSA-sign the RC4-DECRYPTED challenge nonce with the client's private key.
+                # Server RC4-encrypts a random nonce; viewer decrypts it and signs the nonce.
                 # Server verifies using the stored viewer public key (Server_ClientAuth.pubkey).
                 from cryptography.hazmat.primitives import hashes as _hashes
                 if private_key is not None:
-                    sig_73 = private_key.sign(rc4_chal, asym_padding.PKCS1v15(), _hashes.SHA1())
+                    sig_73 = private_key.sign(challenge_dec, asym_padding.PKCS1v15(), _hashes.SHA1())
                     payload_73 = enc_aes_73 + sig_73
-                    sig_desc = f" + {len(sig_73)}B sig(rc4_chal)"
+                    sig_desc = f" + {len(sig_73)}B sig(challenge_dec)"
                 else:
                     payload_73 = enc_aes_73
                     sig_desc = " (no client sig — server-only mode)"
@@ -1898,15 +1899,27 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 _raw72 = _m72.to_bytes(key_size, "big")
                 aes_key_72 = _raw72[-16:]  # AES-128 key in last 16 bytes
 
-                # Parse leftover: [4B flags][challenge bytes]
-                _chal_72 = dsm_leftover_enc[4:] if len(dsm_leftover_enc) > 4 else dsm_leftover_enc
+                # Leftover structure: [4B flags][56B RC4-encrypted challenge nonce]
+                # RC4 key = SHA1(client's 270B DER pubkey)[:16], drop=3072 bytes.
+                # Server encrypts a random nonce with RC4; viewer must decrypt it
+                # and sign the plaintext nonce with its RSA private key.
+                _chal_enc_72 = dsm_leftover_enc[4:] if len(dsm_leftover_enc) > 4 else dsm_leftover_enc
+                _cpub_n72 = private_key.public_key().public_numbers().n
+                _cmod72 = _cpub_n72.to_bytes(key_size, "big")
+                _cder72 = (
+                    b"\x30\x82\x01\x0a" + b"\x02\x82\x01\x01\x00"
+                    + _cmod72 + b"\x02\x03\x01\x00\x01"
+                )  # 270B DER RSAPublicKey
+                _rc4k72 = hashlib.sha1(_cder72).digest()[:16]
+                _chal_dec_72 = _arc4(_rc4k72, _chal_enc_72, drop=3072)
 
                 from cryptography.hazmat.primitives import hashes as _h72
-                _sig_72 = private_key.sign(_chal_72, asym_padding.PKCS1v15(), _h72.SHA1())
+                _sig_72 = private_key.sign(_chal_dec_72, asym_padding.PKCS1v15(), _h72.SHA1())
                 writer.write(_sig_72)
                 await writer.drain()
-                print(f"[VNC {label}] DSM 0x72: raw-RSA aes_key={aes_key_72.hex()} "
-                      f"sent {len(_sig_72)}B sig({len(_chal_72)}B challenge)")
+                print(f"[VNC {label}] DSM 0x72: aes_key={aes_key_72.hex()} "
+                      f"rc4_key={_rc4k72.hex()} chal_enc={_chal_enc_72.hex()} "
+                      f"chal_dec={_chal_dec_72.hex()} sent {len(_sig_72)}B sig")
 
                 _raw_sr72 = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
                 _enc72 = Cipher(algorithms.AES(aes_key_72), _OFB(bytes(16))).encryptor()
