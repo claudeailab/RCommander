@@ -48,6 +48,7 @@ class ServerRow(Base):
     server_group = Column(String, default="")
     vnc_dsm_file_id = Column(Integer, nullable=True)
     vnc_client_key_file_id = Column(Integer, nullable=True)
+    vnc_server_pub_file_id = Column(Integer, nullable=True)
     connection_types = Column(String, default="")
 
 
@@ -86,6 +87,7 @@ class FolderCredentialRow(Base):
     connection_types = Column(String, default="")
     vnc_dsm_file_id = Column(Integer, nullable=True)
     vnc_client_key_file_id = Column(Integer, nullable=True)
+    vnc_server_pub_file_id = Column(Integer, nullable=True)
 
 
 class VncFileRow(Base):
@@ -138,6 +140,7 @@ def _migrate():
                                ("server_group",                   "TEXT NOT NULL DEFAULT ''"),
                                ("vnc_dsm_file_id",                "INTEGER"),
                                ("vnc_client_key_file_id",         "INTEGER"),
+                               ("vnc_server_pub_file_id",         "INTEGER"),
                                ("connection_types",               "TEXT NOT NULL DEFAULT ''")],
         "credentials":        [("description",   "TEXT NOT NULL DEFAULT ''")],
         "commands":           [("description",   "TEXT NOT NULL DEFAULT ''"),
@@ -146,7 +149,8 @@ def _migrate():
         "folder_credentials": [("remote_access_credential_id",    "INTEGER"),
                                ("connection_types",               "TEXT NOT NULL DEFAULT ''"),
                                ("vnc_dsm_file_id",                "INTEGER"),
-                               ("vnc_client_key_file_id",         "INTEGER")],
+                               ("vnc_client_key_file_id",         "INTEGER"),
+                               ("vnc_server_pub_file_id",         "INTEGER")],
         "schedules":          [("credential_id",     "INTEGER"),
                                ("command_id",        "INTEGER"),
                                ("command_text",      "TEXT NOT NULL DEFAULT ''"),
@@ -166,7 +170,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.109"
+APP_VERSION = "1.6.111"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -609,6 +613,7 @@ class ServerIn(BaseModel):
     server_group: str = ""
     vnc_dsm_file_id: Optional[int] = None
     vnc_client_key_file_id: Optional[int] = None
+    vnc_server_pub_file_id: Optional[int] = None
     connection_types: str = ""
 
 
@@ -670,6 +675,7 @@ class FolderCredentialIn(BaseModel):
     connection_types: Optional[str] = None
     vnc_dsm_file_id: Optional[int] = None
     vnc_client_key_file_id: Optional[int] = None
+    vnc_server_pub_file_id: Optional[int] = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -947,7 +953,8 @@ def list_folder_credentials():
                  "remote_access_credential_id": r.remote_access_credential_id,
                  "connection_types": r.connection_types or "",
                  "vnc_dsm_file_id": r.vnc_dsm_file_id,
-                 "vnc_client_key_file_id": r.vnc_client_key_file_id}
+                 "vnc_client_key_file_id": r.vnc_client_key_file_id,
+                 "vnc_server_pub_file_id": r.vnc_server_pub_file_id}
                 for r in db.query(FolderCredentialRow).all()]
 
 
@@ -961,26 +968,30 @@ def set_folder_credential(path: str, data: FolderCredentialIn):
             data.remote_access_credential_id is None and
             not ct and
             data.vnc_dsm_file_id is None and
-            data.vnc_client_key_file_id is None
+            data.vnc_client_key_file_id is None and
+            data.vnc_server_pub_file_id is None
         )
         if nothing_set:
             if row:
                 db.delete(row)
                 db.commit()
             return {"path": path, "credential_id": None, "remote_access_credential_id": None,
-                    "connection_types": "", "vnc_dsm_file_id": None, "vnc_client_key_file_id": None}
+                    "connection_types": "", "vnc_dsm_file_id": None, "vnc_client_key_file_id": None,
+                    "vnc_server_pub_file_id": None}
         if row:
             row.credential_id = data.credential_id
             row.remote_access_credential_id = data.remote_access_credential_id
             row.connection_types = ct
             row.vnc_dsm_file_id = data.vnc_dsm_file_id
             row.vnc_client_key_file_id = data.vnc_client_key_file_id
+            row.vnc_server_pub_file_id = data.vnc_server_pub_file_id
         else:
             db.add(FolderCredentialRow(path=path, credential_id=data.credential_id,
                                        remote_access_credential_id=data.remote_access_credential_id,
                                        connection_types=ct,
                                        vnc_dsm_file_id=data.vnc_dsm_file_id,
-                                       vnc_client_key_file_id=data.vnc_client_key_file_id))
+                                       vnc_client_key_file_id=data.vnc_client_key_file_id,
+                                       vnc_server_pub_file_id=data.vnc_server_pub_file_id))
         # Force-propagate: clear server-level overrides so every server in this
         # folder (and sub-folders) inherits the folder settings.
         for server in db.query(ServerRow).all():
@@ -996,12 +1007,15 @@ def set_folder_credential(path: str, data: FolderCredentialIn):
                     server.vnc_dsm_file_id = None
                 if data.vnc_client_key_file_id is not None:
                     server.vnc_client_key_file_id = None
+                if data.vnc_server_pub_file_id is not None:
+                    server.vnc_server_pub_file_id = None
         db.commit()
     return {"path": path, "credential_id": data.credential_id,
             "remote_access_credential_id": data.remote_access_credential_id,
             "connection_types": ct,
             "vnc_dsm_file_id": data.vnc_dsm_file_id,
-            "vnc_client_key_file_id": data.vnc_client_key_file_id}
+            "vnc_client_key_file_id": data.vnc_client_key_file_id,
+            "vnc_server_pub_file_id": data.vnc_server_pub_file_id}
 
 
 @app.delete("/api/folder-credentials/{path:path}", status_code=204)
@@ -1162,6 +1176,19 @@ def _get_effective_vnc_client_key(server: "ServerRow", db) -> Optional[int]:
     return None
 
 
+def _get_effective_vnc_server_pub(server: "ServerRow", db) -> Optional[int]:
+    if server.vnc_server_pub_file_id:
+        return server.vnc_server_pub_file_id
+    if server.server_group:
+        parts = server.server_group.split("/")
+        for i in range(len(parts), 0, -1):
+            path = "/".join(parts[:i])
+            fc = db.query(FolderCredentialRow).filter_by(path=path).first()
+            if fc and fc.vnc_server_pub_file_id:
+                return fc.vnc_server_pub_file_id
+    return None
+
+
 @app.post("/api/vnc-session")
 def create_vnc_session(data: VncSessionIn):
     _prune_vnc_sessions()
@@ -1177,6 +1204,13 @@ def create_vnc_session(data: VncSessionIn):
             p = os.path.join(VNC_FILES_DIR, f"{client_key_id}.bin")
             if os.path.exists(p):
                 client_key_path = p
+        # Resolve server public key for DSM ClientAuth
+        server_pub_id = _get_effective_vnc_server_pub(server, db)
+        server_pub_path = None
+        if server_pub_id:
+            p = os.path.join(VNC_FILES_DIR, f"{server_pub_id}.bin")
+            if os.path.exists(p):
+                server_pub_path = p
         token = secrets.token_urlsafe(16)
         _vnc_sessions[token] = {
             "host": server.host,
@@ -1186,6 +1220,7 @@ def create_vnc_session(data: VncSessionIn):
             "name": server.name,
             "ts": time.time(),
             "client_key_path": client_key_path,
+            "server_pub_path": server_pub_path,
         }
     return {"token": token}
 
@@ -1467,6 +1502,102 @@ async def _launch_securevnc_helper(host: str, port: int, label: str,
     return reader, writer, proc, temp_files, _output_task
 
 
+async def _mslogon_exchange(reader, writer, label: str,
+                            username: str, password: str,
+                            cipher_dec=None, cipher_enc=None) -> bool:
+    """
+    Handle UltraVNC MS-Logon I/II after DSM tunnel is established.
+    cipher_dec/enc: AES decryptor/encryptor if data is inside AES tunnel, else None (plain/helper).
+    Returns True on success.
+    """
+    raw = b""
+    deadline = asyncio.get_event_loop().time() + 8.0
+    while len(raw) < 4 and asyncio.get_event_loop().time() < deadline:
+        try:
+            chunk = await asyncio.wait_for(reader.read(256), timeout=2.0)
+            if not chunk:
+                break
+            raw += chunk
+        except asyncio.TimeoutError:
+            break
+
+    if not raw:
+        print(f"[VNC {label}] MS-Logon: no challenge received after DSM")
+        return False
+
+    data = cipher_dec.update(raw) if cipher_dec else raw
+    print(f"[VNC {label}] MS-Logon: {len(raw)}B raw={raw[:8].hex()} dec={data[:8].hex()}")
+
+    def _send(plaintext: bytes):
+        out = cipher_enc.update(plaintext) if cipher_enc else plaintext
+        writer.write(out)
+
+    async def _read_sr() -> int:
+        raw_sr = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
+        dec_sr = cipher_dec.update(raw_sr) if cipher_dec else raw_sr
+        return int.from_bytes(dec_sr, "big")
+
+    import warnings as _msw
+    with _msw.catch_warnings():
+        _msw.simplefilter("ignore")
+        from cryptography.hazmat.primitives.ciphers.algorithms import DES as _DES_MS
+
+    if len(data) == 24:
+        # MS-Logon I: 64-bit DH
+        g = int.from_bytes(data[0:8], "big")
+        m = int.from_bytes(data[8:16], "big")
+        sp = int.from_bytes(data[16:24], "big")
+        print(f"[VNC {label}] MS-Logon I: g={g:#x} m={m:#x} sp={sp:#x}")
+        cp = int.from_bytes(os.urandom(8), "big") | 1
+        cpub = pow(g, cp, m) if m > 1 else 0
+        shared = pow(sp, cp, m) if m > 1 else 0
+        _send(cpub.to_bytes(8, "big"))
+        await writer.drain()
+        des_key = shared.to_bytes(8, "big")
+        eu = Cipher(_DES_MS(des_key), modes.ECB()).encryptor().update(
+            (username.encode("utf-8") + b"\x00" * 256)[:256])
+        ep = Cipher(_DES_MS(des_key), modes.ECB()).encryptor().update(
+            (password.encode("utf-8") + b"\x00" * 64)[:64])
+        _send(eu + ep)
+        await writer.drain()
+        sr = await _read_sr()
+        print(f"[VNC {label}] MS-Logon I SR={sr}")
+        if sr != 0:
+            raise _DSMAuthFailure(f"MS-Logon I rejected (SR=0x{sr:08x})")
+        print(f"[VNC {label}] MS-Logon I OK")
+        return True
+
+    elif len(data) == 48:
+        # MS-Logon II: 128-bit DH
+        g = int.from_bytes(data[0:16], "big")
+        m = int.from_bytes(data[16:32], "big")
+        sp = int.from_bytes(data[32:48], "big")
+        print(f"[VNC {label}] MS-Logon II: g={g:#x} m={m:#x}")
+        cp = int.from_bytes(os.urandom(16), "big") | 1
+        cpub = pow(g, cp, m) if m > 1 else 0
+        shared = pow(sp, cp, m) if m > 1 else 0
+        _send(cpub.to_bytes(16, "big"))
+        await writer.drain()
+        aes_key = hashlib.md5(shared.to_bytes(16, "big")).digest()
+        aes32 = aes_key + aes_key
+        eu = Cipher(algorithms.AES(aes32), _OFB(bytes(16))).encryptor().update(
+            (username.encode("utf-8") + b"\x00" * 256)[:256])
+        ep = Cipher(algorithms.AES(aes32), _OFB(bytes(16))).encryptor().update(
+            (password.encode("utf-8") + b"\x00" * 64)[:64])
+        _send(eu + ep)
+        await writer.drain()
+        sr = await _read_sr()
+        print(f"[VNC {label}] MS-Logon II SR={sr}")
+        if sr != 0:
+            raise _DSMAuthFailure(f"MS-Logon II rejected (SR=0x{sr:08x})")
+        print(f"[VNC {label}] MS-Logon II OK")
+        return True
+
+    else:
+        print(f"[VNC {label}] MS-Logon: unexpected {len(data)}B, proceeding anyway: {data.hex()}")
+        return False
+
+
 async def _server_rfb_handshake(reader, writer, client_key_path: str,
                                  password: str, label: str,
                                  username: str = "",
@@ -1521,21 +1652,28 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
     types = list(await asyncio.wait_for(reader.readexactly(num), timeout=5.0))
     print(f"[VNC {label}] Security types offered: {types}")
 
-    if 17 in types and client_key_path:
+    # Try DSM type 17 if available with a client key, OR if no non-DSM types are offered.
+    _has_plain_types = any(t in types for t in [1, 2])
+    if 17 in types and (client_key_path or not _has_plain_types):
         selected = 17
         writer.write(bytes([17]))
         await writer.drain()
 
         _dsm_hdr16 = bytes(16)  # header-derived IV, overridden when 22B header is parsed
 
-        with open(client_key_path, "rb") as f:
-            key_data = f.read()
-        print(f"[VNC {label}] Key file: {client_key_path} size={len(key_data)} "
-              f"magic={key_data[:4].hex() if len(key_data)>=4 else 'short'}")
-        private_key = _load_rsa_private_key(key_data)
-        if private_key is None:
-            raise ValueError("Cannot load RSA private key")
-        key_size = (private_key.key_size + 7) // 8
+        private_key = None
+        key_size = 256  # default for 2048-bit RSA
+        if client_key_path:
+            with open(client_key_path, "rb") as f:
+                key_data = f.read()
+            print(f"[VNC {label}] Key file: {client_key_path} size={len(key_data)} "
+                  f"magic={key_data[:4].hex() if len(key_data)>=4 else 'short'}")
+            private_key = _load_rsa_private_key(key_data)
+            if private_key is None:
+                raise ValueError("Cannot load RSA private key")
+            key_size = (private_key.key_size + 7) // 8
+        else:
+            print(f"[VNC {label}] DSM: no client key — server-key-exchange only (0x73 expected)")
 
         # Drain the full server greeting (TCP may deliver it in multiple chunks).
         # Format: [caps/nonce(4)][sub_count(1)][sub_types(sub_count)]
@@ -1689,18 +1827,22 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 enc_aes_73 = server_pub.encrypt(aes_key_73, asym_padding.PKCS1v15())
 
                 # RSA-sign the RAW CHALLENGE (rc4_chal) with the client's private key.
-                # The server verifies this signature using the stored client public key.
-                # Signing the challenge blob (not the decrypted AES key) matches what
-                # ultravnc_dsm_helper does: RSA_sign(client_priv, SHA1, challenge_bytes).
-                # SECUREVNC_SIGNATURE_SIZE=256.
+                # Signing the challenge blob matches what ultravnc_dsm_helper does:
+                #   RSA_sign(client_priv, SHA1, challenge_bytes).
+                # Skip the signature when no client key is available (server-only mode).
                 from cryptography.hazmat.primitives import hashes as _hashes
-                sig_73 = private_key.sign(rc4_chal, asym_padding.PKCS1v15(), _hashes.SHA1())
+                if private_key is not None:
+                    sig_73 = private_key.sign(rc4_chal, asym_padding.PKCS1v15(), _hashes.SHA1())
+                    payload_73 = enc_aes_73 + sig_73
+                    sig_desc = f" + {len(sig_73)}B sig(challenge)"
+                else:
+                    payload_73 = enc_aes_73
+                    sig_desc = " (no client sig — server-only mode)"
 
-                # Send: 256B RSA-encrypted AES key + 256B client signature = 512B total.
-                writer.write(enc_aes_73 + sig_73)
+                writer.write(payload_73)
                 await writer.drain()
-                print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B enc_key + "
-                      f"{len(sig_73)}B sig(challenge) (total={len(enc_aes_73)+len(sig_73)}B); "
+                print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B enc_key"
+                      f"{sig_desc} (total={len(payload_73)}B); "
                       f"aes_key={aes_key_73.hex()} rc4_key={rc4_key.hex()}")
 
                 # Set up AES-128-OFB cipher contexts.
@@ -1717,6 +1859,16 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 if sr73_plain == 0 or sr73_dec == 0:
                     ok_via = "plain" if sr73_plain == 0 else "AES"
                     print(f"[VNC {label}] DSM 0x73: Auth OK! (SR=0 via {ok_via})")
+                    # SR was plain → helper is handling AES (transparent proxy mode)
+                    # SR was AES-decrypted → Python-native DSM, AES tunnel now active
+                    _aes_active = (sr73_dec == 0 and sr73_plain != 0)
+                    if not _aes_active:
+                        enc_ctx = dec_ctx = None
+                    if username:
+                        await _mslogon_exchange(
+                            reader, writer, label, username, password,
+                            dec_ctx if _aes_active else None,
+                            enc_ctx if _aes_active else None)
                     return enc_ctx, dec_ctx, b""
                 raise _DSMAuthFailure(
                     f"DSM 0x73: SR plain={sr73_plain} aes_dec={sr73_dec} — auth rejected",
@@ -1755,12 +1907,14 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
 
         print(f"[VNC {label}] DSM: decrypting {len(encrypted_key)}B session key")
         # Collect AES key candidates from all padding schemes and byte orderings.
-        # Windows CryptoAPI (CryptEncrypt) reverses the RSA ciphertext bytes before
-        # sending, so we must try both the raw bytes and the reversed bytes.
-        # Exact 16-byte results are inserted at the front (highest priority).
+        # When no client key is loaded (server-only mode), skip RSA-decrypt candidates.
         raw_candidates = []
-        priv_nums = private_key.private_numbers()
-        for enc_bytes, ord_pfx in [(encrypted_key, ""), (encrypted_key[::-1], "REV-")]:
+        if private_key is None:
+            print(f"[VNC {label}] DSM: no private key — skipping RSA decrypt candidates")
+        else:
+          priv_nums = private_key.private_numbers()
+        for enc_bytes, ord_pfx in ([(encrypted_key, ""), (encrypted_key[::-1], "REV-")]
+                                    if private_key is not None else []):
             for pad in [asym_padding.PKCS1v15(),
                         asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
                                           algorithm=hashes.SHA1(), label=None),
@@ -2078,10 +2232,19 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
         if len(pb_resp) == 4:
             _iv, _ok = _pb_check_sr(pb_resp)
             if _ok:
-                enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_iv)).encryptor()
-                dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_iv)).decryptor()
-                dec_ctx.update(pb_resp)
+                _pb_plain_sr = (int.from_bytes(pb_resp, "big") == 0)
+                if _pb_plain_sr:
+                    # Plain SR → helper is handling AES
+                    enc_ctx = dec_ctx = None
+                else:
+                    enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_iv)).encryptor()
+                    dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(_iv)).decryptor()
+                    dec_ctx.update(pb_resp)
                 print(f"[VNC {label}] DSM Auth OK via Path B (SR=0)")
+                if username:
+                    await _mslogon_exchange(
+                        reader, writer, label, username, password,
+                        dec_ctx, enc_ctx)
                 return enc_ctx, dec_ctx, b""
             plain_sr = int.from_bytes(pb_resp, "big")
             raise _DSMAuthFailure(f"Path B: SR=0x{plain_sr:08x} (auth rejected)")
@@ -2116,9 +2279,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             print(f"[VNC {label}] MS-Logon I: SR={_sr_plain} raw={_sr_raw.hex()}")
             if _sr_plain != 0:
                 raise _DSMAuthFailure(f"MS-Logon I rejected: SR=0x{_sr_plain:08x}")
-            # After MS-Logon, the DSM AES cipher is used for the RFB stream.
-            enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).encryptor()
-            dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).decryptor()
+            # MS-Logon arrived without AES wrapper → helper handles AES
+            enc_ctx = dec_ctx = None
             print(f"[VNC {label}] MS-Logon I Auth OK")
             return enc_ctx, dec_ctx, b""
 
@@ -2150,8 +2312,8 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
             print(f"[VNC {label}] MS-Logon II: SR={_sr_plain} raw={_sr_raw.hex()}")
             if _sr_plain != 0:
                 raise _DSMAuthFailure(f"MS-Logon II rejected: SR=0x{_sr_plain:08x}")
-            enc_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).encryptor()
-            dec_ctx = Cipher(algorithms.AES(path_b_aes_key), _OFB(bytes(16))).decryptor()
+            # MS-Logon arrived without AES wrapper → helper handles AES
+            enc_ctx = dec_ctx = None
             print(f"[VNC {label}] MS-Logon II Auth OK")
             return enc_ctx, dec_ctx, b""
 
@@ -2295,14 +2457,24 @@ async def vnc_ws_proxy(websocket: WebSocket, token: str):
             # ultravnc_dsm_helper binary.  Provide server DER from 0x73 so the
             # helper can use ClientAuth.pkey.rsa mode (proper server keystore).
             if client_key_path and os.path.exists(_HELPER_BIN):
+                # Use server_pub from uploaded file first, fall back to 0x73-extracted
+                _server_pub_der = server_pub_der_from_73
+                _spub_path = session.get("server_pub_path")
+                if _spub_path and os.path.exists(_spub_path) and not _server_pub_der:
+                    try:
+                        with open(_spub_path, "rb") as _f:
+                            _server_pub_der = _f.read()
+                        print(f"[VNC {host_label}] Using uploaded server_pub ({len(_server_pub_der)}B)")
+                    except Exception:
+                        pass
                 print(f"[VNC {host_label}] Python DSM exhausted "
                       f"({type(e2).__name__}: {e2}); falling back to native helper"
-                      f" (server_pub_der={len(server_pub_der_from_73)}B)")
+                      f" (server_pub_der={len(_server_pub_der)}B)")
                 try:
                     h_r, h_w, helper_proc, helper_temp_files, helper_output_task = \
                         await _launch_securevnc_helper(
                             session["host"], session["port"], host_label,
-                            client_key_path, server_pub_der=server_pub_der_from_73)
+                            client_key_path, server_pub_der=_server_pub_der)
                     enc_ctx, dec_ctx, srv_pre_buf = await _server_rfb_handshake(
                         h_r, h_w, "", password, host_label, username=username)
                     reader, writer = h_r, h_w
