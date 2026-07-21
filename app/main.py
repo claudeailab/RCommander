@@ -170,7 +170,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.111"
+APP_VERSION = "1.6.112"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1383,14 +1383,9 @@ async def _launch_securevnc_helper(host: str, port: int, label: str,
     """
     Launch ultravnc_dsm_helper in 'securevnc' mode as a local TCP proxy.
 
-    When server_pub_der (270-byte DER RSAPublicKey from 0x73 handshake) is
-    provided, we use the 'ClientAuth.pkey.rsa' mode so the helper can verify
-    the server key AND do client authentication without needing a GUI dialog:
-      keyfile = <base>_ClientAuth.pkey.rsa  (270B server DER public key)
-      <base>_ClientAuth.pkey                (client DER private key, separate file)
-
-    Without server_pub_der we fall back to 'ClientAuth.pkey' mode (client auth
-    only, server key accepted with MITM warning — no Tk dialog needed).
+    Uses 'ClientAuth.pkey' mode: the helper gets the viewer's RSA private key
+    and negotiates the DSM session with the VNC server transparently.
+    No GUI dialog is needed since DISPLAY is stripped from the environment.
 
     Returns (reader, writer, proc, [temp_file_paths]) — caller must terminate
     proc and unlink the temp files.
@@ -1404,30 +1399,7 @@ async def _launch_securevnc_helper(host: str, port: int, label: str,
     base = f"/tmp/svnc_{safe_host}_{port}_{local_port}"
     temp_files = []
 
-    if client_key_path and os.path.exists(client_key_path) and server_pub_der:
-        # Best mode: provide BOTH server keystore and client private key.
-        # keyfile.rsa = server 270B DER public key; keyfile = client DER private key.
-        rsa_path = f"{base}_ClientAuth.pkey.rsa"
-        client_path = f"{base}_ClientAuth.pkey"
-        try:
-            with open(rsa_path, "wb") as f:
-                f.write(server_pub_der)
-            with open(client_path, "wb") as f:
-                f.write(open(client_key_path, "rb").read())
-            temp_files = [rsa_path, client_path]
-            keystore = rsa_path
-            print(f"[VNC {label}] DSM helper: server_pub_der({len(server_pub_der)}B) → "
-                  f"{rsa_path}; client key → {client_path}")
-        except Exception as e:
-            print(f"[VNC {label}] DSM helper: failed to write keystore files: {e}")
-            for p in [rsa_path, client_path]:
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
-            temp_files = []
-            keystore = f"{base}_ClientAuth.pkey"
-    elif client_key_path and os.path.exists(client_key_path):
+    if client_key_path and os.path.exists(client_key_path):
         # Client auth only — server key accepted without verification (MITM warning).
         # The helper's 'ClientAuth.pkey' mode skips server keystore check
         # so no Tk dialog is shown.
@@ -1819,22 +1791,26 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 challenge_dec = _arc4(rc4_key, rc4_chal, drop=3072)
                 print(f"[VNC {label}] DSM 0x73: challenge_dec(server_DER,drop=3072)={challenge_dec.hex()}")
 
-                # AES-128 session key = first 16 bytes of decrypted challenge.
-                aes_key_73 = challenge_dec[:16]
+                # Viewer generates a fresh random AES-128 session key.
+                # UltraVNC SecureVNCPlugin2 0x73: viewer chooses the key, encrypts
+                # for the server with raw RSA (no PKCS/OAEP padding).
+                aes_key_73 = os.urandom(16)
                 aes_iv_73 = bytes(16)  # IV = all zeros
 
-                # RSA-encrypt the AES key with the server's public key (PKCS#1 v1.5).
-                enc_aes_73 = server_pub.encrypt(aes_key_73, asym_padding.PKCS1v15())
+                # Raw RSA encrypt: C = m^e mod n  (UltraVNC uses no padding).
+                _spub_n = server_pub.public_numbers().n
+                _spub_e = server_pub.public_numbers().e
+                _m73 = int.from_bytes(aes_key_73, "big")
+                _c73 = pow(_m73, _spub_e, _spub_n)
+                enc_aes_73 = _c73.to_bytes(key_size, "big")
 
                 # RSA-sign the RAW CHALLENGE (rc4_chal) with the client's private key.
-                # Signing the challenge blob matches what ultravnc_dsm_helper does:
-                #   RSA_sign(client_priv, SHA1, challenge_bytes).
-                # Skip the signature when no client key is available (server-only mode).
+                # Server verifies using the stored viewer public key (Server_ClientAuth.pubkey).
                 from cryptography.hazmat.primitives import hashes as _hashes
                 if private_key is not None:
                     sig_73 = private_key.sign(rc4_chal, asym_padding.PKCS1v15(), _hashes.SHA1())
                     payload_73 = enc_aes_73 + sig_73
-                    sig_desc = f" + {len(sig_73)}B sig(challenge)"
+                    sig_desc = f" + {len(sig_73)}B sig(rc4_chal)"
                 else:
                     payload_73 = enc_aes_73
                     sig_desc = " (no client sig — server-only mode)"
@@ -1906,6 +1882,61 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 dsm_leftover_enc = enc_buf[key_size:]
 
         print(f"[VNC {label}] DSM: decrypting {len(encrypted_key)}B session key")
+
+        # ── 0x72 Correct Protocol ─────────────────────────────────────────────
+        # SecureVNCPlugin2 ClientAuth (0x72):
+        #   Server RSA-raw-encrypts its generated AES key with the viewer's
+        #   stored public key → viewer raw-RSA-decrypts to recover AES key.
+        #   Leftover = [4B flags][56B RC4-challenge viewer must sign].
+        #   Viewer sends 256B PKCS1v15-SHA1 signature; server replies with
+        #   4B SR (AES-OFB encrypted, IV=zeros).
+        if chosen == 0x72 and private_key is not None:
+            try:
+                _pn72 = private_key.private_numbers()
+                _c72 = int.from_bytes(encrypted_key, "big")
+                _m72 = pow(_c72, _pn72.d, _pn72.public_numbers.n)
+                _raw72 = _m72.to_bytes(key_size, "big")
+                aes_key_72 = _raw72[-16:]  # AES-128 key in last 16 bytes
+
+                # Parse leftover: [4B flags][challenge bytes]
+                _chal_72 = dsm_leftover_enc[4:] if len(dsm_leftover_enc) > 4 else dsm_leftover_enc
+
+                from cryptography.hazmat.primitives import hashes as _h72
+                _sig_72 = private_key.sign(_chal_72, asym_padding.PKCS1v15(), _h72.SHA1())
+                writer.write(_sig_72)
+                await writer.drain()
+                print(f"[VNC {label}] DSM 0x72: raw-RSA aes_key={aes_key_72.hex()} "
+                      f"sent {len(_sig_72)}B sig({len(_chal_72)}B challenge)")
+
+                _raw_sr72 = await asyncio.wait_for(reader.readexactly(4), timeout=8.0)
+                _enc72 = Cipher(algorithms.AES(aes_key_72), _OFB(bytes(16))).encryptor()
+                _dec72 = Cipher(algorithms.AES(aes_key_72), _OFB(bytes(16))).decryptor()
+                _dec_sr72 = int.from_bytes(_dec72.update(_raw_sr72), "big")
+                _plain_sr72 = int.from_bytes(_raw_sr72, "big")
+                print(f"[VNC {label}] DSM 0x72: SR raw={_raw_sr72.hex()} "
+                      f"aes_dec={_dec_sr72} plain={_plain_sr72}")
+
+                if _dec_sr72 == 0 or _plain_sr72 == 0:
+                    _aes72_active = (_dec_sr72 == 0 and _plain_sr72 != 0)
+                    print(f"[VNC {label}] DSM 0x72: Auth OK! "
+                          f"({'AES-decrypted' if _aes72_active else 'plain'} SR=0)")
+                    if not _aes72_active:
+                        _enc72 = _dec72 = None
+                    if username:
+                        await _mslogon_exchange(reader, writer, label, username, password,
+                                                _dec72 if _aes72_active else None,
+                                                _enc72 if _aes72_active else None)
+                    return _enc72, _dec72, b""
+                raise _DSMAuthFailure(
+                    f"DSM 0x72: SR aes={_dec_sr72} plain={_plain_sr72} — auth rejected"
+                )
+            except _DSMAuthFailure:
+                raise
+            except Exception as _e72:
+                print(f"[VNC {label}] DSM 0x72 correct-protocol failed: {_e72}")
+                # Fall through to legacy probing as best-effort fallback.
+        # ─────────────────────────────────────────────────────────────────────
+
         # Collect AES key candidates from all padding schemes and byte orderings.
         # When no client key is loaded (server-only mode), skip RSA-decrypt candidates.
         raw_candidates = []
