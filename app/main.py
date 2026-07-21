@@ -170,7 +170,7 @@ def _migrate():
 
 _migrate()
 
-APP_VERSION = "1.6.114"
+APP_VERSION = "1.6.115"
 
 # ── VNC session store (short-lived, in-memory) ────────────────────────────────
 _vnc_sessions: dict = {}
@@ -1400,22 +1400,30 @@ async def _launch_securevnc_helper(host: str, port: int, label: str,
     temp_files = []
 
     if client_key_path and os.path.exists(client_key_path):
-        # Client auth only — server key accepted without verification (MITM warning).
-        # The helper's 'ClientAuth.pkey' mode skips server keystore check
-        # so no Tk dialog is shown.
-        client_path = f"{base}_ClientAuth.pkey"
+        # Write the private key in PEM format so ssvnc's helper can parse it.
+        # The raw file may be DER (binary); convert to standard PKCS#1 PEM.
+        client_path = f"{base}_ClientAuth.pem"
         try:
+            from cryptography.hazmat.primitives.serialization import (
+                load_der_private_key, Encoding, PrivateFormat, NoEncryption)
+            _raw_key = open(client_key_path, "rb").read()
+            try:
+                _pkey_obj = load_der_private_key(_raw_key, password=None)
+                _pem_data = _pkey_obj.private_bytes(
+                    Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption())
+            except Exception:
+                _pem_data = _raw_key  # fallback: write as-is
             with open(client_path, "wb") as f:
-                f.write(open(client_key_path, "rb").read())
+                f.write(_pem_data)
             temp_files = [client_path]
             keystore = client_path
-            print(f"[VNC {label}] DSM helper: client key → {client_path} (no server keystore)")
+            print(f"[VNC {label}] DSM helper: client key (PEM) → {client_path}")
         except Exception as e:
             print(f"[VNC {label}] DSM helper: failed to write client key: {e}")
             temp_files = []
-            keystore = f"{base}_ClientAuth.pkey"
+            keystore = f"{base}_ClientAuth.pem"
     else:
-        keystore = f"{base}_ClientAuth.pkey"
+        keystore = f"{base}_ClientAuth.pem"
         print(f"[VNC {label}] DSM helper: no keys — running without keystore")
 
     # Strip DISPLAY/XAUTHORITY so 'wish' (Tcl/Tk) fails fast instead of blocking.
@@ -1823,7 +1831,7 @@ async def _server_rfb_handshake(reader, writer, client_key_path: str,
                 await writer.drain()
                 print(f"[VNC {label}] DSM 0x73: sent {len(enc_aes_73)}B enc_key"
                       f"{sig_desc} (total={len(payload_73)}B); "
-                      f"aes_key={aes_key_73.hex()} rc4_key={rc4_key.hex()}")
+                      f"aes_key={aes_key_73.hex()} rc4_key(client_DER)={rc4_key_client_der.hex()}")
 
                 # Set up AES-128-OFB cipher contexts.
                 enc_ctx = Cipher(algorithms.AES(aes_key_73), _OFB(aes_iv_73)).encryptor()
